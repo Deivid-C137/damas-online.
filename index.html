@@ -1,0 +1,67 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Damas Online</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <main class="game">
+    <header>
+      <p class="subtitle">JOGO CLÁSSICO</p>
+      <h1>DAMAS <span>ONLINE</span></h1>
+      <p id="status">Conectando ao servidor...</p>
+    </header>
+
+    <section class="game-panel">
+      <div id="lobby">
+        <h2>Jogar online</h2>
+        <button id="create-room">Criar sala</button>
+
+        <div class="join-controls">
+          <input
+            id="room-code"
+            type="text"
+            maxlength="6"
+            placeholder="Código da sala"
+            autocomplete="off"
+            aria-label="Código da sala"
+          >
+          <button id="join-room">Entrar</button>
+        </div>
+
+        <p id="room-info" role="status">Conectando...</p>
+      </div>
+
+      <div class="player">
+        <div class="player-piece black-piece"></div>
+        <div>
+          <strong>Pretas</strong>
+          <p id="black-player">Aguardando jogador</p>
+        </div>
+      </div>
+
+      <div id="board" aria-label="Tabuleiro de damas"></div>
+
+      <div class="player">
+        <div class="player-piece white-piece"></div>
+        <div>
+          <strong>Brancas</strong>
+          <p id="white-player">Aguardando jogador</p>
+        </div>
+      </div>
+
+      <button id="reset">↻ Nova partida</button>
+    </section>
+
+    <footer>
+      <p>Selecione uma peça e escolha uma casa para movimentá-la.</p>
+      <p>Versão 1.1 · Multiplayer em preparação</p>
+    </footer>
+  </main>
+</body>
+</html>
