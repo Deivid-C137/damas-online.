@@ -1,0 +1,128 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#080b16">
+  <title>Damas Online | Neon Arena</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <main class="game">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon">♛</div>
+        <div>
+          <p class="subtitle">ARENA MULTIPLAYER</p>
+          <h1>DAMAS <span>ONLINE</span></h1>
+        </div>
+      </div>
+      <div class="connection">
+        <span class="connection-dot"></span>
+        <span id="status">Conectando ao servidor...</span>
+      </div>
+    </header>
+
+    <section class="game-layout">
+      <aside class="sidebar">
+        <section id="lobby" class="panel lobby">
+          <div class="section-heading">
+            <span class="eyebrow">MULTIPLAYER</span>
+            <h2>Entrar na arena</h2>
+            <p>Crie uma sala ou use um código de convite.</p>
+          </div>
+
+          <button id="create-room" class="btn btn-primary">
+            <span>＋</span> Criar sala
+          </button>
+
+          <div class="input-label">CÓDIGO DA SALA</div>
+          <div class="join-controls">
+            <input
+              id="room-code"
+              type="text"
+              maxlength="6"
+              placeholder="EX: A7K9PQ"
+              autocomplete="off"
+              aria-label="Código da sala"
+            >
+            <button id="join-room" class="btn btn-secondary">Entrar</button>
+          </div>
+
+          <p id="room-info" class="room-info" role="status">
+            Conectando ao servidor...
+          </p>
+        </section>
+
+        <section class="panel match-panel">
+          <span class="eyebrow">PARTIDA ATUAL</span>
+          <h2>Jogadores</h2>
+
+          <div id="black-card" class="player player-black">
+            <div class="player-piece black-piece"></div>
+            <div class="player-details">
+              <strong>Pretas</strong>
+              <p id="black-player">Aguardando jogador</p>
+            </div>
+            <span class="player-tag">P1</span>
+          </div>
+
+          <div class="versus">VS</div>
+
+          <div id="white-card" class="player player-white">
+            <div class="player-piece white-piece"></div>
+            <div class="player-details">
+              <strong>Brancas</strong>
+              <p id="white-player">Aguardando jogador</p>
+            </div>
+            <span class="player-tag">P2</span>
+          </div>
+
+          <div class="match-tip">
+            <span>✦</span>
+            <p>Capturas são obrigatórias. Se puder continuar capturando, use a mesma peça.</p>
+          </div>
+
+          <button id="reset" class="btn btn-reset">↻ Nova partida local</button>
+        </section>
+      </aside>
+
+      <section class="arena panel">
+        <div class="arena-heading">
+          <div>
+            <span class="eyebrow">CAMPO DE BATALHA</span>
+            <h2>Tabuleiro <span>8 × 8</span></h2>
+          </div>
+          <div class="live-label"><span></span> AO VIVO</div>
+        </div>
+
+        <div id="turn-banner" class="turn-banner waiting" aria-live="polite">
+          <span class="turn-icon">⌛</span>
+          <div>
+            <strong id="turn-title">AGUARDANDO PARTIDA</strong>
+            <p id="turn-description">Crie uma sala ou entre com um código.</p>
+          </div>
+        </div>
+
+        <div class="board-frame">
+          <div id="board" aria-label="Tabuleiro de damas"></div>
+        </div>
+
+        <div class="board-legend">
+          <span><i class="legend-dot cyan"></i> Suas peças</span>
+          <span><i class="legend-dot purple"></i> Casas possíveis</span>
+          <span><i class="legend-dot pink"></i> Peça selecionada</span>
+        </div>
+      </section>
+    </section>
+
+    <footer class="footer">
+      <span>NEON ARENA <span class="footer-separator">/</span> DAMAS ONLINE</span>
+      <span>Damas brasileiras · 8 × 8</span>
+    </footer>
+  </main>
+</body>
+</html>
