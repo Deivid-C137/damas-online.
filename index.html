@@ -5,15 +5,22 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#080b16">
+
   <title>Damas Online | Neon Arena</title>
-  <link rel="stylesheet" href="style.css">
+
+  <link rel="stylesheet" href="/style.css">
+
+  <!-- Conexão multiplayer -->
   <script src="/socket.io/socket.io.js"></script>
-  <script src="script.js" defer></script>
+
+  <!-- Lógica do jogo -->
+  <script src="/script.js" defer></script>
 </head>
 
 <body>
   <main class="game">
 
+    <!-- CABEÇALHO -->
     <header class="topbar">
       <div class="brand">
         <div class="brand-icon">♛</div>
@@ -29,6 +36,40 @@
       </div>
     </header>
 
+    <!-- CONTA DO JOGADOR -->
+    <section class="panel login-panel" id="login-panel">
+      <div class="section-heading">
+        <span class="eyebrow">IDENTIFICAÇÃO</span>
+        <h2>Sua conta</h2>
+        <p>Entre com o Google para identificar seu perfil de jogador.</p>
+      </div>
+
+      <div class="login-content">
+        <div class="player-avatar" aria-hidden="true">♟</div>
+        <div class="login-details">
+          <strong id="login-status" aria-live="polite">
+            Você não está conectado.
+          </strong>
+          <p id="login-email">Entre para carregar sua conta.</p>
+        </div>
+      </div>
+
+      <div class="login-actions">
+        <button id="google-login" class="btn btn-primary" type="button">
+          Entrar com Google
+        </button>
+
+        <button id="google-logout" class="btn btn-secondary" type="button" hidden>
+          Sair da conta
+        </button>
+      </div>
+
+      <p id="login-message" class="wallet-message" role="status">
+        Entre para identificar sua conta de jogador.
+      </p>
+    </section>
+
+    <!-- ÁREA PRINCIPAL -->
     <section class="game-layout">
 
       <aside class="sidebar">
@@ -48,11 +89,7 @@
             Créditos fictícios para jogar.
           </p>
 
-          <button
-            id="refresh-wallet"
-            class="btn btn-secondary"
-            type="button"
-          >
+          <button id="refresh-wallet" class="btn btn-secondary" type="button">
             Atualizar saldo
           </button>
 
@@ -61,7 +98,7 @@
           </p>
         </section>
 
-        <!-- SALA ONLINE -->
+        <!-- SALAS MULTIPLAYER -->
         <section id="lobby" class="panel lobby">
           <div class="section-heading">
             <span class="eyebrow">MULTIPLAYER</span>
@@ -69,11 +106,7 @@
             <p>Crie uma sala ou use um código de convite.</p>
           </div>
 
-          <button
-            id="create-room"
-            class="btn btn-primary"
-            type="button"
-          >
+          <button id="create-room" class="btn btn-primary" type="button">
             <span>＋</span> Criar sala
           </button>
 
@@ -89,11 +122,7 @@
               aria-label="Código da sala"
             >
 
-            <button
-              id="join-room"
-              class="btn btn-secondary"
-              type="button"
-            >
+            <button id="join-room" class="btn btn-secondary" type="button">
               Entrar
             </button>
           </div>
@@ -131,16 +160,12 @@
           <div class="match-tip">
             <span>✦</span>
             <p>
-              Capturas são obrigatórias. Se puder continuar
-              capturando, use a mesma peça.
+              Capturas são obrigatórias. Se puder continuar capturando,
+              use a mesma peça.
             </p>
           </div>
 
-          <button
-            id="reset"
-            class="btn btn-reset"
-            type="button"
-          >
+          <button id="reset" class="btn btn-reset" type="button">
             ↻ Nova partida local
           </button>
         </section>
@@ -149,7 +174,6 @@
 
       <!-- TABULEIRO -->
       <section class="arena panel">
-
         <div class="arena-heading">
           <div>
             <span class="eyebrow">CAMPO DE BATALHA</span>
@@ -161,11 +185,8 @@
           </div>
         </div>
 
-        <div
-          id="turn-banner"
-          class="turn-banner waiting"
-          aria-live="polite"
-        >
+        <!-- TURNO -->
+        <div id="turn-banner" class="turn-banner waiting" aria-live="polite">
           <span class="turn-icon">⌛</span>
           <div>
             <strong id="turn-title">AGUARDANDO PARTIDA</strong>
@@ -175,27 +196,32 @@
           </div>
         </div>
 
+        <!-- CASAS GERADAS PELO SCRIPT.JS -->
         <div class="board-frame">
-          <div id="board" aria-label="Tabuleiro de damas"></div>
+          <div id="board" aria-label="Tabuleiro de damas" role="group"></div>
         </div>
 
+        <!-- LEGENDA -->
         <div class="board-legend">
           <span><i class="legend-dot cyan"></i> Suas peças</span>
           <span><i class="legend-dot purple"></i> Casas possíveis</span>
           <span><i class="legend-dot pink"></i> Peça selecionada</span>
         </div>
-
       </section>
+
     </section>
 
+    <!-- RODAPÉ -->
     <footer class="footer">
       <span>
-        NEON ARENA <span class="footer-separator">/</span>
-        DAMAS ONLINE
+        NEON ARENA <span class="footer-separator">/</span> DAMAS ONLINE
       </span>
       <span>Damas brasileiras · 8 × 8</span>
     </footer>
 
   </main>
+
+  <!-- Login Google / Firebase: carregar uma única vez -->
+  <script type="module" src="/auth.js"></script>
 </body>
 </html>
