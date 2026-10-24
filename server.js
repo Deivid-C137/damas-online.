@@ -1,18 +1,22 @@
 
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
 const path = require("path");
-const admin = require("firebase-admin");
+const { Server } = require("socket.io");
+
+const { initializeApp, getApps, cert } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
 
 // ==========================================
 // FIREBASE ADMIN
-// Local: usa firebase-service-account.json
-// Render: usa FIREBASE_SERVICE_ACCOUNT
+// Render: FIREBASE_SERVICE_ACCOUNT
+// Local: firebase-service-account.json
 // ==========================================
 
+let firebaseAuth;
+
 try {
-  if (admin.apps.length === 0) {
+  if (getApps().length === 0) {
     let serviceAccount;
 
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
@@ -23,12 +27,13 @@ try {
       serviceAccount = require("./firebase-service-account.json");
     }
 
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
+    initializeApp({
+      credential: cert(serviceAccount)
     });
-
-    console.log("Firebase Admin inicializado com sucesso.");
   }
+
+  firebaseAuth = getAuth();
+  console.log("Firebase Admin inicializado com sucesso.");
 } catch (error) {
   console.error(
     "Erro ao inicializar o Firebase Admin:",
@@ -38,7 +43,7 @@ try {
 }
 
 // ==========================================
-// SERVIDOR
+// SERVIDOR HTTP E SOCKET.IO
 // ==========================================
 
 const app = express();
@@ -53,7 +58,7 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.static(path.join(__dirname)));
+app.use(express.static(__dirname));
 
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
@@ -81,10 +86,7 @@ function createInitialBoard() {
   for (let r = 0; r < 3; r++) {
     for (let c = 0; c < 8; c++) {
       if ((r + c) % 2 === 1) {
-        board[r][c] = {
-          color: "black",
-          king: false
-        };
+        board[r][c] = { color: "black", king: false };
       }
     }
   }
@@ -92,10 +94,7 @@ function createInitialBoard() {
   for (let r = 5; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
       if ((r + c) % 2 === 1) {
-        board[r][c] = {
-          color: "white",
-          king: false
-        };
+        board[r][c] = { color: "white", king: false };
       }
     }
   }
@@ -104,16 +103,13 @@ function createInitialBoard() {
 }
 
 function generateRoomCode() {
-  const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code;
 
   do {
     code = "";
-
     for (let i = 0; i < 6; i++) {
-      code += characters[
-        Math.floor(Math.random() * characters.length)
-      ];
+      code += chars[Math.floor(Math.random() * chars.length)];
     }
   } while (rooms.has(code));
 
@@ -129,13 +125,11 @@ function otherColor(color) {
 }
 
 // ==========================================
-// MOVIMENTOS POSSÍVEIS
+// MOVIMENTOS E CAPTURAS
 // ==========================================
 
 function movesFor(board, r, c, capturesOnly = false) {
-  if (!inside(r, c) || !board[r][c]) {
-    return [];
-  }
+  if (!inside(r, c) || !board[r][c]) return [];
 
   const piece = board[r][c];
   const moves = [];
@@ -145,22 +139,16 @@ function movesFor(board, r, c, capturesOnly = false) {
       let nr = r + dr;
       let nc = c + dc;
 
-      // PEÇA COMUM
+      // Peça comum
       if (!piece.king) {
         const forward = piece.color === "black" ? 1 : -1;
 
-        if (dr !== forward) continue;
-        if (!inside(nr, nc)) continue;
+        if (dr !== forward || !inside(nr, nc)) continue;
 
         if (!board[nr][nc]) {
           if (!capturesOnly) {
-            moves.push({
-              r: nr,
-              c: nc,
-              capture: null
-            });
+            moves.push({ r: nr, c: nc, capture: null });
           }
-
           continue;
         }
 
@@ -168,17 +156,11 @@ function movesFor(board, r, c, capturesOnly = false) {
           const landR = nr + dr;
           const landC = nc + dc;
 
-          if (
-            inside(landR, landC) &&
-            !board[landR][landC]
-          ) {
+          if (inside(landR, landC) && !board[landR][landC]) {
             moves.push({
               r: landR,
               c: landC,
-              capture: {
-                r: nr,
-                c: nc
-              }
+              capture: { r: nr, c: nc }
             });
           }
         }
@@ -186,7 +168,7 @@ function movesFor(board, r, c, capturesOnly = false) {
         continue;
       }
 
-      // DAMA: PERCORRE AS DIAGONAIS
+      // Dama: percorre as diagonais e pode capturar à distância
       let enemy = null;
 
       while (inside(nr, nc)) {
@@ -197,27 +179,15 @@ function movesFor(board, r, c, capturesOnly = false) {
             moves.push({
               r: nr,
               c: nc,
-              capture: {
-                r: enemy.r,
-                c: enemy.c
-              }
+              capture: { r: enemy.r, c: enemy.c }
             });
           } else if (!capturesOnly) {
-            moves.push({
-              r: nr,
-              c: nc,
-              capture: null
-            });
+            moves.push({ r: nr, c: nc, capture: null });
           }
         } else {
-          if (occupant.color === piece.color || enemy) {
-            break;
-          }
+          if (occupant.color === piece.color || enemy) break;
 
-          enemy = {
-            r: nr,
-            c: nc
-          };
+          enemy = { r: nr, c: nc };
         }
 
         nr += dr;
@@ -234,9 +204,7 @@ function allCaptures(board, color) {
 
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
-      if (board[r][c]?.color !== color) {
-        continue;
-      }
+      if (board[r][c]?.color !== color) continue;
 
       if (movesFor(board, r, c, true).length > 0) {
         result.push({ r, c });
@@ -250,22 +218,14 @@ function allCaptures(board, color) {
 function hasAnyMove(board, color) {
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
-      if (board[r][c]?.color !== color) {
-        continue;
-      }
+      if (board[r][c]?.color !== color) continue;
 
-      if (movesFor(board, r, c).length > 0) {
-        return true;
-      }
+      if (movesFor(board, r, c).length > 0) return true;
     }
   }
 
   return false;
 }
-
-// ==========================================
-// ATUALIZAR O TABULEIRO PARA OS JOGADORES
-// ==========================================
 
 function broadcastBoard(room, message = "") {
   io.to(room.code).emit("boardUpdate", {
@@ -279,7 +239,7 @@ function broadcastBoard(room, message = "") {
 }
 
 // ==========================================
-// AUTENTICAÇÃO GOOGLE / FIREBASE
+// AUTENTICAÇÃO FIREBASE
 // ==========================================
 
 io.use(async (socket, next) => {
@@ -292,7 +252,7 @@ io.use(async (socket, next) => {
       );
     }
 
-    const decodedToken = await admin.auth().verifyIdToken(token);
+    const decodedToken = await firebaseAuth.verifyIdToken(token);
 
     socket.data.user = {
       uid: decodedToken.uid,
@@ -302,10 +262,7 @@ io.use(async (socket, next) => {
 
     next();
   } catch (error) {
-    console.error(
-      "Falha ao verificar token Firebase:",
-      error.message
-    );
+    console.error("Falha ao verificar token Firebase:", error.message);
 
     next(
       new Error(
@@ -327,16 +284,10 @@ io.on("connection", socket => {
     socket.data.user.uid
   );
 
-  // ========================================
-  // CRIAR SALA
-  // ========================================
-
+  // Criar sala
   socket.on("createRoom", () => {
     if (socket.data.roomCode) {
-      socket.emit(
-        "roomError",
-        "Você já está em uma sala."
-      );
+      socket.emit("roomError", "Você já está em uma sala.");
       return;
     }
 
@@ -369,23 +320,15 @@ io.on("connection", socket => {
     console.log("Sala criada:", code);
   });
 
-  // ========================================
-  // ENTRAR EM UMA SALA
-  // ========================================
-
+  // Entrar em sala
   socket.on("joinRoom", input => {
     if (socket.data.roomCode) {
-      socket.emit(
-        "roomError",
-        "Você já está em uma sala."
-      );
+      socket.emit("roomError", "Você já está em uma sala.");
       return;
     }
 
     const code = String(
-      typeof input === "string"
-        ? input
-        : input?.code || ""
+      typeof input === "string" ? input : input?.code || ""
     ).trim().toUpperCase();
 
     if (!code) {
@@ -401,10 +344,7 @@ io.on("connection", socket => {
     }
 
     if (room.players.white || room.gameOver) {
-      socket.emit(
-        "roomError",
-        "Esta sala não está disponível."
-      );
+      socket.emit("roomError", "Esta sala não está disponível.");
       return;
     }
 
@@ -428,36 +368,24 @@ io.on("connection", socket => {
     console.log("Partida iniciada na sala:", code);
   });
 
-  // ========================================
-  // RECEBER E VALIDAR JOGADAS
-  // ========================================
-
+  // Receber e validar jogadas
   socket.on("moveAttempt", move => {
     const code = socket.data.roomCode;
     const color = socket.data.color;
     const room = rooms.get(code);
 
     if (!room || !color) {
-      socket.emit(
-        "moveRejected",
-        "Você não está em uma sala."
-      );
+      socket.emit("moveRejected", "Você não está em uma sala.");
       return;
     }
 
     if (room.gameOver) {
-      socket.emit(
-        "moveRejected",
-        "A partida já terminou."
-      );
+      socket.emit("moveRejected", "A partida já terminou.");
       return;
     }
 
     if (!room.players.white) {
-      socket.emit(
-        "moveRejected",
-        "Aguardando o adversário."
-      );
+      socket.emit("moveRejected", "Aguardando o adversário.");
       return;
     }
 
@@ -467,9 +395,8 @@ io.on("connection", socket => {
     }
 
     if (
-      !move ||
-      !move.from ||
-      !move.to ||
+      !move?.from ||
+      !move?.to ||
       !Number.isInteger(move.from.r) ||
       !Number.isInteger(move.from.c) ||
       !Number.isInteger(move.to.r) ||
@@ -486,27 +413,19 @@ io.on("connection", socket => {
     const piece = room.board[from.r][from.c];
 
     if (!piece || piece.color !== color) {
-      socket.emit(
-        "moveRejected",
-        "Essa peça não é sua."
-      );
+      socket.emit("moveRejected", "Essa peça não é sua.");
       return;
     }
 
     if (room.board[to.r][to.c]) {
-      socket.emit(
-        "moveRejected",
-        "A casa de destino está ocupada."
-      );
+      socket.emit("moveRejected", "A casa de destino está ocupada.");
       return;
     }
 
     if (
       room.mustContinue &&
-      (
-        from.r !== room.mustContinue.r ||
-        from.c !== room.mustContinue.c
-      )
+      (from.r !== room.mustContinue.r ||
+        from.c !== room.mustContinue.c)
     ) {
       socket.emit(
         "moveRejected",
@@ -520,9 +439,7 @@ io.on("connection", socket => {
     if (
       !room.mustContinue &&
       captures.length > 0 &&
-      !captures.some(
-        p => p.r === from.r && p.c === from.c
-      )
+      !captures.some(p => p.r === from.r && p.c === from.c)
     ) {
       socket.emit(
         "moveRejected",
@@ -547,16 +464,12 @@ io.on("connection", socket => {
       return;
     }
 
-    // Executar movimento
+    // Executar jogada
     room.board[to.r][to.c] = piece;
     room.board[from.r][from.c] = null;
 
     if (chosenMove.capture) {
-      room.board[
-        chosenMove.capture.r
-      ][
-        chosenMove.capture.c
-      ] = null;
+      room.board[chosenMove.capture.r][chosenMove.capture.c] = null;
     }
 
     // Promover a dama
@@ -567,28 +480,19 @@ io.on("connection", socket => {
       piece.king = true;
     }
 
-    // Capturas múltiplas
+    // Captura múltipla: a mesma peça continua jogando
     if (
       chosenMove.capture &&
       movesFor(room.board, to.r, to.c, true).length > 0
     ) {
-      room.mustContinue = {
-        r: to.r,
-        c: to.c
-      };
-
-      broadcastBoard(
-        room,
-        "Continue capturando com a mesma peça."
-      );
-
+      room.mustContinue = { r: to.r, c: to.c };
+      broadcastBoard(room, "Continue capturando com a mesma peça.");
       return;
     }
 
     room.mustContinue = null;
     room.turn = otherColor(room.turn);
 
-    // Verificar fim da partida
     if (!hasAnyMove(room.board, room.turn)) {
       room.gameOver = true;
       room.winner = color;
@@ -606,24 +510,16 @@ io.on("connection", socket => {
 
     broadcastBoard(
       room,
-      room.turn === "black"
-        ? "Vez das pretas."
-        : "Vez das brancas."
+      room.turn === "black" ? "Vez das pretas." : "Vez das brancas."
     );
   });
 
-  // ========================================
-  // SAÍDA VOLUNTÁRIA
-  // ========================================
-
+  // Saída voluntária
   socket.on("leaveRoom", () => {
     leaveCurrentRoom(socket);
   });
 
-  // ========================================
-  // DESCONECTAR
-  // ========================================
-
+  // Desconexão
   socket.on("disconnect", reason => {
     console.log(
       "Jogador desconectado:",
@@ -643,9 +539,7 @@ io.on("connection", socket => {
 function leaveCurrentRoom(socket) {
   const code = socket.data.roomCode;
 
-  if (!code) {
-    return;
-  }
+  if (!code) return;
 
   const room = rooms.get(code);
 
@@ -654,19 +548,16 @@ function leaveCurrentRoom(socket) {
   delete socket.data.roomCode;
   delete socket.data.color;
 
-  if (!room) {
-    return;
-  }
+  if (!room) return;
 
-  const color = room.players.black === socket.id
-    ? "black"
-    : room.players.white === socket.id
-      ? "white"
-      : null;
+  const color =
+    room.players.black === socket.id
+      ? "black"
+      : room.players.white === socket.id
+        ? "white"
+        : null;
 
-  if (!color) {
-    return;
-  }
+  if (!color) return;
 
   room.players[color] = null;
 
@@ -674,16 +565,11 @@ function leaveCurrentRoom(socket) {
     message: "O adversário saiu da partida."
   });
 
-  // Se a sala ficar vazia, removê-la.
-  if (!room.players.black && !room.players.white) {
-    rooms.delete(code);
-    console.log("Sala removida:", code);
-    return;
-  }
-
-  // Se alguém sair, encerra a sala para novas entradas.
-  // O jogador restante recebe o aviso acima.
+  // A sala é removida quando um jogador sai.
+  // Isso impede que um jogador novo entre numa partida abandonada.
   rooms.delete(code);
+
+  console.log("Sala encerrada após saída de jogador:", code);
 }
 
 // ==========================================
