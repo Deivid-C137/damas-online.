@@ -1,4 +1,3 @@
-
 "use strict";
 
 // ==================================================
@@ -23,14 +22,14 @@ const blackCard = document.getElementById("black-card");
 const whiteCard = document.getElementById("white-card");
 
 // ==================================================
-// CONEXÃO E ESTADO
+// ESTADO DO JOGO
 // ==================================================
 
 let socket = null;
 let firebaseToken = null;
 let connectingSocket = false;
 
-let board;
+let board = [];
 let turn = "black";
 let selected = null;
 let legalMoves = [];
@@ -42,12 +41,10 @@ let onlineRoomCode = null;
 let onlinePlayerColor = null;
 let onlineGameActive = false;
 
-// Evita que a mesma página registre os mesmos controles
-// repetidamente ao reconectar.
 let roomControlsRegistered = false;
 
 // ==================================================
-// TABULEIRO INICIAL
+// TABULEIRO
 // ==================================================
 
 function createInitialBoard() {
@@ -86,8 +83,8 @@ function newGame() {
   turn = "black";
   selected = null;
   legalMoves = [];
-  mustContinue = null;
   gameOver = false;
+  mustContinue = null;
   movePending = false;
 
   render();
@@ -95,6 +92,10 @@ function newGame() {
 
 function inside(r, c) {
   return r >= 0 && r < 8 && c >= 0 && c < 8;
+}
+
+function otherColor(color) {
+  return color === "black" ? "white" : "black";
 }
 
 // ==================================================
@@ -109,52 +110,76 @@ function movesFor(r, c, capturesOnly = false) {
   const piece = board[r][c];
   const moves = [];
 
+  // --------------------------------------------------
+  // PEÇA COMUM
+  // Anda para frente e captura para frente ou para trás.
+  // --------------------------------------------------
+
+  if (!piece.king) {
+    const forward = piece.color === "black" ? 1 : -1;
+
+    for (const dc of [-1, 1]) {
+      // Movimento simples: somente para frente.
+      const nextR = r + forward;
+      const nextC = c + dc;
+
+      if (
+        !capturesOnly &&
+        inside(nextR, nextC) &&
+        !board[nextR][nextC]
+      ) {
+        moves.push({
+          r: nextR,
+          c: nextC,
+          capture: null
+        });
+      }
+
+      // Captura: pode ser para frente ou para trás.
+      for (const dr of [-1, 1]) {
+        const enemyR = r + dr;
+        const enemyC = c + dc;
+        const landingR = r + dr * 2;
+        const landingC = c + dc * 2;
+
+        if (
+          !inside(enemyR, enemyC) ||
+          !inside(landingR, landingC)
+        ) {
+          continue;
+        }
+
+        const enemy = board[enemyR][enemyC];
+
+        if (
+          enemy &&
+          enemy.color !== piece.color &&
+          !board[landingR][landingC]
+        ) {
+          moves.push({
+            r: landingR,
+            c: landingC,
+            capture: {
+              r: enemyR,
+              c: enemyC
+            }
+          });
+        }
+      }
+    }
+
+    return moves;
+  }
+
+  // --------------------------------------------------
+  // DAMA
+  // Move pelas diagonais e captura peças adversárias.
+  // --------------------------------------------------
+
   for (const dr of [-1, 1]) {
     for (const dc of [-1, 1]) {
       let nr = r + dr;
       let nc = c + dc;
-
-      // Peça comum: anda uma casa para a frente.
-      // Capturas para trás não estão incluídas nesta regra.
-      if (!piece.king) {
-        const forward = piece.color === "black" ? 1 : -1;
-
-        if (dr !== forward) continue;
-        if (!inside(nr, nc)) continue;
-
-        if (!board[nr][nc]) {
-          if (!capturesOnly) {
-            moves.push({
-              r: nr,
-              c: nc,
-              capture: null
-            });
-          }
-
-          continue;
-        }
-
-        if (board[nr][nc].color !== piece.color) {
-          const landR = nr + dr;
-          const landC = nc + dc;
-
-          if (
-            inside(landR, landC) &&
-            !board[landR][landC]
-          ) {
-            moves.push({
-              r: landR,
-              c: landC,
-              capture: { r: nr, c: nc }
-            });
-          }
-        }
-
-        continue;
-      }
-
-      // Dama: percorre as diagonais e pode capturar
-      // uma peça adversária se houver casa livre depois dela.
       let enemy = null;
 
       while (inside(nr, nc)) {
@@ -165,7 +190,10 @@ function movesFor(r, c, capturesOnly = false) {
             moves.push({
               r: nr,
               c: nc,
-              capture: { r: enemy.r, c: enemy.c }
+              capture: {
+                r: enemy.r,
+                c: enemy.c
+              }
             });
           } else if (!capturesOnly) {
             moves.push({
@@ -179,7 +207,10 @@ function movesFor(r, c, capturesOnly = false) {
             break;
           }
 
-          enemy = { r: nr, c: nc };
+          enemy = {
+            r: nr,
+            c: nc
+          };
         }
 
         nr += dr;
@@ -196,7 +227,9 @@ function allCaptures(color) {
 
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
-      if (board[r][c]?.color !== color) continue;
+      if (board[r][c]?.color !== color) {
+        continue;
+      }
 
       if (movesFor(r, c, true).length > 0) {
         result.push({ r, c });
@@ -210,7 +243,9 @@ function allCaptures(color) {
 function hasAnyMove(color) {
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
-      if (board[r][c]?.color !== color) continue;
+      if (board[r][c]?.color !== color) {
+        continue;
+      }
 
       if (movesFor(r, c).length > 0) {
         return true;
@@ -270,6 +305,7 @@ function updateTurnBanner() {
   if (onlineRoomCode) {
     if (turn === onlinePlayerColor) {
       turnBanner.classList.add("your-turn");
+
       turnTitle.textContent = movePending
         ? "JOGADA ENVIADA"
         : "É SUA VEZ!";
@@ -290,6 +326,7 @@ function updateTurnBanner() {
   }
 
   turnBanner.classList.add("your-turn");
+
   turnTitle.textContent =
     turn === "black" ? "VEZ DAS PRETAS" : "VEZ DAS BRANCAS";
 
@@ -303,7 +340,9 @@ function updateTurnBanner() {
 // ==================================================
 
 function render() {
-  if (!boardElement || !statusElement || !board) return;
+  if (!boardElement || !statusElement || !board) {
+    return;
+  }
 
   boardElement.innerHTML = "";
 
@@ -342,7 +381,10 @@ function render() {
         cell.appendChild(disk);
       }
 
-      cell.addEventListener("click", () => clickCell(r, c));
+      cell.addEventListener("click", () => {
+        clickCell(r, c);
+      });
+
       boardElement.appendChild(cell);
     }
   }
@@ -369,7 +411,9 @@ function render() {
 // ==================================================
 
 function clickCell(r, c) {
-  if (gameOver || movePending) return;
+  if (gameOver || movePending) {
+    return;
+  }
 
   if (onlineRoomCode) {
     if (!onlineGameActive) {
@@ -377,6 +421,7 @@ function clickCell(r, c) {
         statusElement.textContent =
           "Aguardando o adversário entrar na sala.";
       }
+
       return;
     }
 
@@ -392,8 +437,9 @@ function clickCell(r, c) {
 // ==================================================
 
 function clickLocalCell(r, c) {
-  const chosenMove = selected &&
-    legalMoves.find(m => m.r === r && m.c === c);
+  const chosenMove = selected
+    ? legalMoves.find(m => m.r === r && m.c === c)
+    : null;
 
   if (chosenMove) {
     const piece = board[selected.r][selected.c];
@@ -405,6 +451,7 @@ function clickLocalCell(r, c) {
       board[chosenMove.capture.r][chosenMove.capture.c] = null;
     }
 
+    // Promove a peça a dama ao chegar à última linha.
     if (
       (piece.color === "black" && r === 7) ||
       (piece.color === "white" && r === 0)
@@ -415,12 +462,20 @@ function clickLocalCell(r, c) {
     selected = null;
     legalMoves = [];
 
-    if (chosenMove.capture && movesFor(r, c, true).length > 0) {
+    // Se ainda houver captura, a mesma peça continua jogando.
+    if (
+      chosenMove.capture &&
+      movesFor(r, c, true).length > 0
+    ) {
+      mustContinue = { r, c };
       selected = { r, c };
       legalMoves = movesFor(r, c, true);
+
       render();
 
-      statusElement.textContent = "Continue capturando!";
+      statusElement.textContent =
+        "Continue capturando com a mesma peça.";
+
       updateTurnBanner();
       return;
     }
@@ -452,6 +507,7 @@ function clickLocalCell(r, c) {
     }
 
     selected = { r, c };
+
     legalMoves = movesFor(
       r,
       c,
@@ -477,12 +533,16 @@ function clickLocalCell(r, c) {
 
 function finishLocalTurn() {
   mustContinue = null;
-  turn = turn === "black" ? "white" : "black";
+  selected = null;
+  legalMoves = [];
+
+  turn = otherColor(turn);
 
   if (!hasAnyMove(turn)) {
     gameOver = true;
+
     statusElement.textContent =
-      `Fim de jogo! ${turn === "black" ? "Brancas" : "Pretas"} venceram!`;
+      `Fim de jogo! ${otherColor(turn) === "black" ? "Pretas" : "Brancas"} venceram!`;
   }
 
   render();
@@ -493,10 +553,13 @@ function finishLocalTurn() {
 // ==================================================
 
 function clickOnlineCell(r, c) {
-  if (movePending || gameOver) return;
+  if (movePending || gameOver) {
+    return;
+  }
 
   if (!socket?.connected) {
-    statusElement.textContent = "Conexão perdida com o servidor.";
+    statusElement.textContent =
+      "Conexão perdida com o servidor.";
     return;
   }
 
@@ -505,18 +568,22 @@ function clickOnlineCell(r, c) {
     return;
   }
 
-  const chosenMove = selected &&
-    legalMoves.find(m => m.r === r && m.c === c);
+  const chosenMove = selected
+    ? legalMoves.find(m => m.r === r && m.c === c)
+    : null;
 
   if (chosenMove) {
     movePending = true;
 
     socket.emit("moveAttempt", {
-      from: { r: selected.r, c: selected.c },
+      from: {
+        r: selected.r,
+        c: selected.c
+      },
       to: { r, c }
     });
 
-    statusElement.textContent = "Enviando jogada...";
+    statusElement.textContent = "Enviando jogada.";
     updateTurnBanner();
     return;
   }
@@ -544,6 +611,7 @@ function clickOnlineCell(r, c) {
     }
 
     selected = { r, c };
+
     legalMoves = movesFor(
       r,
       c,
@@ -568,11 +636,13 @@ function clickOnlineCell(r, c) {
 }
 
 // ==================================================
-// CONTROLES DA SALA
+// CONTROLES DAS SALAS
 // ==================================================
 
 function registerRoomControls() {
-  if (roomControlsRegistered) return;
+  if (roomControlsRegistered) {
+    return;
+  }
 
   if (!createRoomButton || !joinRoomButton || !roomCodeInput) {
     console.error("Elementos de sala não encontrados no HTML.");
@@ -587,11 +657,15 @@ function registerRoomControls() {
         roomInfo.textContent =
           "Faça login com Google e aguarde a conexão.";
       }
+
       return;
     }
 
     if (onlineRoomCode) {
-      roomInfo.textContent = "Você já está em uma sala.";
+      if (roomInfo) {
+        roomInfo.textContent = "Você já está em uma sala.";
+      }
+
       return;
     }
 
@@ -604,18 +678,25 @@ function registerRoomControls() {
         roomInfo.textContent =
           "Faça login com Google e aguarde a conexão.";
       }
+
       return;
     }
 
     const code = roomCodeInput.value.trim().toUpperCase();
 
     if (!code) {
-      if (roomInfo) roomInfo.textContent = "Digite o código da sala.";
+      if (roomInfo) {
+        roomInfo.textContent = "Digite o código da sala.";
+      }
+
       return;
     }
 
     if (onlineRoomCode) {
-      if (roomInfo) roomInfo.textContent = "Você já está em uma sala.";
+      if (roomInfo) {
+        roomInfo.textContent = "Você já está em uma sala.";
+      }
+
       return;
     }
 
@@ -638,7 +719,8 @@ function registerSocketEvents(gameSocket) {
     if (gameSocket !== socket) return;
 
     connectingSocket = false;
-    console.log("Conectado ao servidor do jogo!");
+
+    console.log("Conectado ao servidor do jogo.");
 
     if (roomInfo) {
       roomInfo.textContent =
@@ -650,6 +732,7 @@ function registerSocketEvents(gameSocket) {
     if (gameSocket !== socket) return;
 
     connectingSocket = false;
+
     console.error("Erro na conexão:", error.message);
 
     if (roomInfo) {
@@ -663,10 +746,16 @@ function registerSocketEvents(gameSocket) {
     onlineRoomCode = data.code;
     onlinePlayerColor = data.color;
     onlineGameActive = false;
+
     movePending = false;
     gameOver = false;
+    mustContinue = null;
+    selected = null;
+    legalMoves = [];
 
-    if (roomCodeInput) roomCodeInput.value = data.code;
+    if (roomCodeInput) {
+      roomCodeInput.value = data.code;
+    }
 
     if (roomInfo) {
       roomInfo.textContent =
@@ -675,7 +764,9 @@ function registerSocketEvents(gameSocket) {
 
     if (blackPlayerLabel) {
       blackPlayerLabel.textContent =
-        data.color === "black" ? "Você (pretas)" : "Jogador 1 (pretas)";
+        data.color === "black"
+          ? "Você (pretas)"
+          : "Jogador 1 (pretas)";
     }
 
     if (whitePlayerLabel) {
@@ -694,8 +785,12 @@ function registerSocketEvents(gameSocket) {
     onlineRoomCode = data.code;
     onlinePlayerColor = data.color;
     onlineGameActive = false;
+
     movePending = false;
     gameOver = false;
+    mustContinue = null;
+    selected = null;
+    legalMoves = [];
 
     if (roomInfo) {
       roomInfo.textContent = `Você entrou na sala ${data.code}.`;
@@ -703,12 +798,16 @@ function registerSocketEvents(gameSocket) {
 
     if (blackPlayerLabel) {
       blackPlayerLabel.textContent =
-        data.color === "black" ? "Você (pretas)" : "Jogador 1 (pretas)";
+        data.color === "black"
+          ? "Você (pretas)"
+          : "Jogador 1 (pretas)";
     }
 
     if (whitePlayerLabel) {
       whitePlayerLabel.textContent =
-        data.color === "white" ? "Você (brancas)" : "Jogador 2 (brancas)";
+        data.color === "white"
+          ? "Você (brancas)"
+          : "Jogador 2 (brancas)";
     }
 
     if (createRoomButton) createRoomButton.disabled = true;
@@ -722,6 +821,7 @@ function registerSocketEvents(gameSocket) {
 
     board = data.board;
     turn = data.turn;
+
     selected = null;
     legalMoves = [];
     mustContinue = null;
@@ -733,7 +833,9 @@ function registerSocketEvents(gameSocket) {
       roomInfo.textContent = data.message || "Partida iniciada!";
     }
 
-    if (statusElement) statusElement.textContent = "Partida iniciada.";
+    if (statusElement) {
+      statusElement.textContent = "Partida iniciada.";
+    }
 
     render();
   });
@@ -805,6 +907,7 @@ function registerSocketEvents(gameSocket) {
     onlineRoomCode = null;
     onlinePlayerColor = null;
     onlineGameActive = false;
+
     mustContinue = null;
     selected = null;
     legalMoves = [];
@@ -842,7 +945,7 @@ function registerSocketEvents(gameSocket) {
 }
 
 // ==================================================
-// CONECTAR AO SERVIDOR COM TOKEN FIREBASE
+// CONEXÃO COM FIREBASE
 // ==================================================
 
 function connectGameSocket(token) {
@@ -856,13 +959,13 @@ function connectGameSocket(token) {
     }
 
     if (roomInfo) {
-      roomInfo.textContent = "Faça login com Google para jogar online.";
+      roomInfo.textContent =
+        "Faça login com Google para jogar online.";
     }
 
     return;
   }
 
-  // Evita recriar uma conexão para o mesmo token.
   if (token === firebaseToken && socket) {
     return;
   }
@@ -891,8 +994,7 @@ function connectGameSocket(token) {
   registerSocketEvents(gameSocket);
 }
 
-// O auth.js precisa disparar esse evento quando o login
-// terminar e também quando o usuário sair da conta.
+// O auth.js deve emitir esse evento após login/logout.
 window.addEventListener("firebase-user-token", event => {
   connectGameSocket(event.detail?.token || null);
 });
@@ -908,6 +1010,7 @@ if (resetButton) {
         statusElement.textContent =
           "O reinício online está desativado para evitar dessincronização.";
       }
+
       return;
     }
 
