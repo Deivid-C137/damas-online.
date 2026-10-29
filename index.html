@@ -1,4 +1,4 @@
-
+```html
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -13,7 +13,7 @@
   <!-- Conexão multiplayer -->
   <script src="/socket.io/socket.io.js"></script>
 
-  <!-- Lógica do jogo -->
+  <!-- Lógica principal do jogo -->
   <script src="/script.js" defer></script>
 </head>
 
@@ -23,7 +23,8 @@
     <!-- CABEÇALHO -->
     <header class="topbar">
       <div class="brand">
-        <div class="brand-icon">♛</div>
+        <div class="brand-icon" aria-hidden="true">♛</div>
+
         <div>
           <p class="subtitle">ARENA MULTIPLAYER</p>
           <h1>DAMAS <span>ONLINE</span></h1>
@@ -31,8 +32,10 @@
       </div>
 
       <div class="connection">
-        <span class="connection-dot"></span>
-        <span id="status">Conectando ao servidor...</span>
+        <span class="connection-dot" aria-hidden="true"></span>
+        <span id="status" role="status" aria-live="polite">
+          Conectando ao servidor...
+        </span>
       </div>
     </header>
 
@@ -46,20 +49,31 @@
 
       <div class="login-content">
         <div class="player-avatar" aria-hidden="true">♟</div>
+
         <div class="login-details">
           <strong id="login-status" aria-live="polite">
             Você não está conectado.
           </strong>
+
           <p id="login-email">Entre para carregar sua conta.</p>
         </div>
       </div>
 
       <div class="login-actions">
-        <button id="google-login" class="btn btn-primary" type="button">
+        <button
+          id="google-login"
+          class="btn btn-primary"
+          type="button"
+        >
           Entrar com Google
         </button>
 
-        <button id="google-logout" class="btn btn-secondary" type="button" hidden>
+        <button
+          id="google-logout"
+          class="btn btn-secondary"
+          type="button"
+          hidden
+        >
           Sair da conta
         </button>
       </div>
@@ -80,7 +94,7 @@
           <h2>Saldo virtual</h2>
 
           <div class="wallet-balance">
-            <span class="coin-icon">◈</span>
+            <span class="coin-icon" aria-hidden="true">◈</span>
             <span id="wallet-balance">500,00</span>
             <span class="credit-label">CRÉDITOS</span>
           </div>
@@ -89,7 +103,11 @@
             Créditos fictícios para jogar.
           </p>
 
-          <button id="refresh-wallet" class="btn btn-secondary" type="button">
+          <button
+            id="refresh-wallet"
+            class="btn btn-secondary"
+            type="button"
+          >
             Atualizar saldo
           </button>
 
@@ -106,8 +124,12 @@
             <p>Crie uma sala ou use um código de convite.</p>
           </div>
 
-          <button id="create-room" class="btn btn-primary" type="button">
-            <span>＋</span> Criar sala
+          <button
+            id="create-room"
+            class="btn btn-primary"
+            type="button"
+          >
+            <span aria-hidden="true">＋</span> Criar sala
           </button>
 
           <div class="input-label">CÓDIGO DA SALA</div>
@@ -119,53 +141,67 @@
               maxlength="6"
               placeholder="EX: A7K9PQ"
               autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
               aria-label="Código da sala"
             >
 
-            <button id="join-room" class="btn btn-secondary" type="button">
+            <button
+              id="join-room"
+              class="btn btn-secondary"
+              type="button"
+            >
               Entrar
             </button>
           </div>
 
-          <p id="room-info" class="room-info" role="status">
+          <p id="room-info" class="room-info" role="status" aria-live="polite">
             Conectando ao servidor...
           </p>
         </section>
 
-        <!-- JOGADORES -->
+        <!-- JOGADORES DA PARTIDA -->
         <section class="panel match-panel">
           <span class="eyebrow">PARTIDA ATUAL</span>
           <h2>Jogadores</h2>
 
           <div id="black-card" class="player player-black">
-            <div class="player-piece black-piece"></div>
+            <div class="player-piece black-piece" aria-hidden="true"></div>
+
             <div class="player-details">
               <strong>Pretas</strong>
               <p id="black-player">Aguardando jogador</p>
             </div>
+
             <span class="player-tag">P1</span>
           </div>
 
-          <div class="versus">VS</div>
+          <div class="versus" aria-hidden="true">VS</div>
 
           <div id="white-card" class="player player-white">
-            <div class="player-piece white-piece"></div>
+            <div class="player-piece white-piece" aria-hidden="true"></div>
+
             <div class="player-details">
               <strong>Brancas</strong>
               <p id="white-player">Aguardando jogador</p>
             </div>
+
             <span class="player-tag">P2</span>
           </div>
 
           <div class="match-tip">
-            <span>✦</span>
+            <span aria-hidden="true">✦</span>
             <p>
               Capturas são obrigatórias. Se puder continuar capturando,
               use a mesma peça.
             </p>
           </div>
 
-          <button id="reset" class="btn btn-reset" type="button">
+          <button
+            id="reset"
+            class="btn btn-reset"
+            type="button"
+          >
             ↻ Nova partida local
           </button>
         </section>
@@ -180,32 +216,64 @@
             <h2>Tabuleiro <span>8 × 8</span></h2>
           </div>
 
-          <div class="live-label">
-            <span></span> AO VIVO
+          <!-- INDICADOR DE PARTIDA -->
+          <!-- Vermelho: sem partida ativa -->
+          <!-- Verde: partida ativa com adversário -->
+          <div
+            id="live-status"
+            class="live-label offline"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <span class="live-dot" aria-hidden="true"></span>
+            <strong id="live-status-text">OFFLINE</strong>
           </div>
         </div>
 
-        <!-- TURNO -->
-        <div id="turn-banner" class="turn-banner waiting" aria-live="polite">
-          <span class="turn-icon">⌛</span>
+        <!-- INDICADOR DE TURNO -->
+        <div
+          id="turn-banner"
+          class="turn-banner waiting"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span class="turn-icon" aria-hidden="true">⌛</span>
+
           <div>
             <strong id="turn-title">AGUARDANDO PARTIDA</strong>
+
             <p id="turn-description">
               Crie uma sala ou entre com um código.
             </p>
           </div>
         </div>
 
-        <!-- CASAS GERADAS PELO SCRIPT.JS -->
+        <!-- TABULEIRO GERADO PELO SCRIPT.JS -->
         <div class="board-frame">
-          <div id="board" aria-label="Tabuleiro de damas" role="group"></div>
+          <div
+            id="board"
+            aria-label="Tabuleiro de damas"
+            role="group"
+          ></div>
         </div>
 
         <!-- LEGENDA -->
         <div class="board-legend">
-          <span><i class="legend-dot cyan"></i> Suas peças</span>
-          <span><i class="legend-dot purple"></i> Casas possíveis</span>
-          <span><i class="legend-dot pink"></i> Peça selecionada</span>
+          <span>
+            <i class="legend-dot cyan" aria-hidden="true"></i>
+            Suas peças
+          </span>
+
+          <span>
+            <i class="legend-dot purple" aria-hidden="true"></i>
+            Casas possíveis
+          </span>
+
+          <span>
+            <i class="legend-dot pink" aria-hidden="true"></i>
+            Peça selecionada
+          </span>
         </div>
       </section>
 
@@ -216,12 +284,14 @@
       <span>
         NEON ARENA <span class="footer-separator">/</span> DAMAS ONLINE
       </span>
+
       <span>Damas brasileiras · 8 × 8</span>
     </footer>
 
   </main>
 
-  <!-- Login Google / Firebase: carregar uma única vez -->
+  <!-- Login Google / Firebase -->
   <script type="module" src="/auth.js"></script>
 </body>
 </html>
+```
