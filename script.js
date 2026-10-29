@@ -1,1028 +1,1146 @@
+
 "use strict";
 
-// ==================================================
-// ELEMENTOS DO HTML
-// ==================================================
+(() => {
+  // =====================================================
+  // DAMAS ONLINE — CLIENTE MULTIPLAYER
+  // Compatível com os IDs do index.html enviado.
+  // O servidor é a autoridade da partida online.
+  // =====================================================
 
-const boardElement = document.getElementById("board");
-const statusElement = document.getElementById("status");
-const resetButton = document.getElementById("reset");
+  const $ = id => document.getElementById(id);
 
-const createRoomButton = document.getElementById("create-room");
-const joinRoomButton = document.getElementById("join-room");
-const roomCodeInput = document.getElementById("room-code");
-const roomInfo = document.getElementById("room-info");
-const blackPlayerLabel = document.getElementById("black-player");
-const whitePlayerLabel = document.getElementById("white-player");
+  const boardElement = $("board");
+  const statusElement = $("status");
+  const resetButton = $("reset");
+  const createRoomButton = $("create-room");
+  const joinRoomButton = $("join-room");
+  const roomCodeInput = $("room-code");
+  const roomInfoElement = $("room-info");
 
-const turnBanner = document.getElementById("turn-banner");
-const turnTitle = document.getElementById("turn-title");
-const turnDescription = document.getElementById("turn-description");
-const blackCard = document.getElementById("black-card");
-const whiteCard = document.getElementById("white-card");
+  const liveStatusElement = $("live-status");
+  const liveStatusText = $("live-status-text");
+  const turnBannerElement = $("turn-banner");
+  const turnTitleElement = $("turn-title");
+  const turnDescriptionElement = $("turn-description");
 
-// ==================================================
-// ESTADO DO JOGO
-// ==================================================
+  const blackCardElement = $("black-card");
+  const whiteCardElement = $("white-card");
+  const blackPlayerElement = $("black-player");
+  const whitePlayerElement = $("white-player");
 
-let socket = null;
-let firebaseToken = null;
-let connectingSocket = false;
+  const BLACK = "black";
+  const WHITE = "white";
+  const SIZE = 8;
 
-let board = [];
-let turn = "black";
-let selected = null;
-let legalMoves = [];
-let gameOver = false;
-let mustContinue = null;
-let movePending = false;
+  let board = [];
+  let turn = BLACK;
+  let selectedPiece = null;
+  let legalMoves = [];
+  let mustContinue = null;
+  let gameOver = false;
+  let movePending = false;
 
-let onlineRoomCode = null;
-let onlinePlayerColor = null;
-let onlineGameActive = false;
+  let socket = null;
+  let firebaseToken = null;
 
-let roomControlsRegistered = false;
+  let onlineRoomCode = null;
+  let onlinePlayerColor = null;
+  let onlineGameActive = false;
+  let roomControlsRegistered = false;
 
-// ==================================================
-// TABULEIRO
-// ==================================================
+  // ------------------ TABULEIRO ------------------
 
-function createInitialBoard() {
-  const newBoard = Array.from(
-    { length: 8 },
-    () => Array(8).fill(null)
-  );
+  function initialBoard() {
+    const result = Array.from(
+      { length: SIZE },
+      () => Array(SIZE).fill(null)
+    );
 
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 8; c++) {
-      if ((r + c) % 2 === 1) {
-        newBoard[r][c] = {
-          color: "black",
-          king: false
-        };
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        if ((r + c) % 2 === 1) {
+          result[r][c] = { color: BLACK, king: false };
+        }
       }
     }
-  }
 
-  for (let r = 5; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      if ((r + c) % 2 === 1) {
-        newBoard[r][c] = {
-          color: "white",
-          king: false
-        };
+    for (let r = 5; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        if ((r + c) % 2 === 1) {
+          result[r][c] = { color: WHITE, king: false };
+        }
       }
     }
+
+    return result;
   }
 
-  return newBoard;
-}
-
-function newGame() {
-  board = createInitialBoard();
-  turn = "black";
-  selected = null;
-  legalMoves = [];
-  gameOver = false;
-  mustContinue = null;
-  movePending = false;
-
-  render();
-}
-
-function inside(r, c) {
-  return r >= 0 && r < 8 && c >= 0 && c < 8;
-}
-
-function otherColor(color) {
-  return color === "black" ? "white" : "black";
-}
-
-// ==================================================
-// MOVIMENTOS E CAPTURAS
-// ==================================================
-
-function movesFor(r, c, capturesOnly = false) {
-  if (!inside(r, c) || !board[r][c]) {
-    return [];
+  function resetBoard() {
+    board = initialBoard();
+    turn = BLACK;
+    selectedPiece = null;
+    legalMoves = [];
+    mustContinue = null;
+    gameOver = false;
+    movePending = false;
   }
 
-  const piece = board[r][c];
-  const moves = [];
+  function inside(r, c) {
+    return r >= 0 && r < SIZE && c >= 0 && c < SIZE;
+  }
 
-  // --------------------------------------------------
-  // PEÇA COMUM
-  // Anda para frente e captura para frente ou para trás.
-  // --------------------------------------------------
+  function otherColor(color) {
+    return color === BLACK ? WHITE : BLACK;
+  }
 
-  if (!piece.king) {
-    const forward = piece.color === "black" ? 1 : -1;
+  function cloneBoard(source) {
+    return source.map(row =>
+      row.map(piece =>
+        piece
+          ? { color: piece.color, king: Boolean(piece.king) }
+          : null
+      )
+    );
+  }
 
-    for (const dc of [-1, 1]) {
-      // Movimento simples: somente para frente.
-      const nextR = r + forward;
-      const nextC = c + dc;
+  function normalizeBoard(source) {
+    if (!Array.isArray(source) || source.length !== SIZE) {
+      return null;
+    }
 
-      if (
-        !capturesOnly &&
-        inside(nextR, nextC) &&
-        !board[nextR][nextC]
-      ) {
+    const result = [];
+
+    for (const row of source) {
+      if (!Array.isArray(row) || row.length !== SIZE) {
+        return null;
+      }
+
+      const normalizedRow = [];
+
+      for (const piece of row) {
+        if (piece == null) {
+          normalizedRow.push(null);
+        } else if (
+          typeof piece === "object" &&
+          (piece.color === BLACK || piece.color === WHITE)
+        ) {
+          normalizedRow.push({
+            color: piece.color,
+            king: Boolean(piece.king)
+          });
+        } else {
+          return null;
+        }
+      }
+
+      result.push(normalizedRow);
+    }
+
+    return result;
+  }
+
+  // ------------------ MOVIMENTOS LOCAIS ------------------
+  // Usados somente no modo offline.
+  // O servidor valida todas as jogadas online.
+
+  function simpleMoves(r, c) {
+    const piece = board[r]?.[c];
+    if (!piece) return [];
+
+    const moves = [];
+    const directions = piece.king
+      ? [[-1, -1], [-1, 1], [1, -1], [1, 1]]
+      : [[piece.color === BLACK ? 1 : -1, -1],
+         [piece.color === BLACK ? 1 : -1, 1]];
+
+    for (const [dr, dc] of directions) {
+      let nr = r + dr;
+      let nc = c + dc;
+
+      while (inside(nr, nc) && !board[nr][nc]) {
         moves.push({
-          r: nextR,
-          c: nextC,
+          from: { row: r, col: c },
+          to: { row: nr, col: nc },
           capture: null
         });
-      }
 
-      // Captura: pode ser para frente ou para trás.
-      for (const dr of [-1, 1]) {
-        const enemyR = r + dr;
-        const enemyC = c + dc;
-        const landingR = r + dr * 2;
-        const landingC = c + dc * 2;
+        if (!piece.king) break;
 
-        if (
-          !inside(enemyR, enemyC) ||
-          !inside(landingR, landingC)
-        ) {
-          continue;
-        }
-
-        const enemy = board[enemyR][enemyC];
-
-        if (
-          enemy &&
-          enemy.color !== piece.color &&
-          !board[landingR][landingC]
-        ) {
-          moves.push({
-            r: landingR,
-            c: landingC,
-            capture: {
-              r: enemyR,
-              c: enemyC
-            }
-          });
-        }
+        nr += dr;
+        nc += dc;
       }
     }
 
     return moves;
   }
 
-  // --------------------------------------------------
-  // DAMA
-  // Move pelas diagonais e captura peças adversárias.
-  // --------------------------------------------------
+  function capturesFor(r, c, source = board) {
+    const piece = source[r]?.[c];
+    if (!piece) return [];
 
-  for (const dr of [-1, 1]) {
-    for (const dc of [-1, 1]) {
+    const captures = [];
+    const directions = [
+      [-1, -1], [-1, 1], [1, -1], [1, 1]
+    ];
+
+    for (const [dr, dc] of directions) {
       let nr = r + dr;
       let nc = c + dc;
+
+      if (!piece.king) {
+        const lr = r + dr * 2;
+        const lc = c + dc * 2;
+
+        if (
+          inside(nr, nc) &&
+          inside(lr, lc) &&
+          source[nr][nc] &&
+          source[nr][nc].color !== piece.color &&
+          !source[lr][lc]
+        ) {
+          captures.push({
+            from: { row: r, col: c },
+            to: { row: lr, col: lc },
+            capture: { row: nr, col: nc }
+          });
+        }
+
+        continue;
+      }
+
       let enemy = null;
 
       while (inside(nr, nc)) {
-        const occupant = board[nr][nc];
+        const occupant = source[nr][nc];
 
         if (!occupant) {
           if (enemy) {
-            moves.push({
-              r: nr,
-              c: nc,
-              capture: {
-                r: enemy.r,
-                c: enemy.c
-              }
-            });
-          } else if (!capturesOnly) {
-            moves.push({
-              r: nr,
-              c: nc,
-              capture: null
+            captures.push({
+              from: { row: r, col: c },
+              to: { row: nr, col: nc },
+              capture: { ...enemy }
             });
           }
         } else {
-          if (occupant.color === piece.color || enemy) {
-            break;
-          }
-
-          enemy = {
-            r: nr,
-            c: nc
-          };
+          if (occupant.color === piece.color || enemy) break;
+          enemy = { row: nr, col: nc };
         }
 
         nr += dr;
         nc += dc;
       }
     }
+
+    return captures;
   }
 
-  return moves;
-}
+  function allCaptures(color = turn) {
+    const result = [];
 
-function allCaptures(color) {
-  const result = [];
-
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      if (board[r][c]?.color !== color) {
-        continue;
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        if (board[r][c]?.color === color) {
+          result.push(...capturesFor(r, c));
+        }
       }
+    }
 
-      if (movesFor(r, c, true).length > 0) {
-        result.push({ r, c });
-      }
+    return result;
+  }
+
+  function legalMovesFor(r, c) {
+    const piece = board[r]?.[c];
+
+    if (
+      !piece ||
+      piece.color !== turn ||
+      gameOver ||
+      movePending
+    ) {
+      return [];
+    }
+
+    if (
+      mustContinue &&
+      (mustContinue.r !== r || mustContinue.c !== c)
+    ) {
+      return [];
+    }
+
+    if (mustContinue) return capturesFor(r, c);
+
+    const captures = allCaptures();
+
+    if (captures.length) {
+      return captures.filter(
+        move =>
+          move.from.row === r &&
+          move.from.col === c
+      );
+    }
+
+    return simpleMoves(r, c);
+  }
+
+  function promote(piece, row) {
+    if (
+      piece &&
+      !piece.king &&
+      ((piece.color === BLACK && row === 7) ||
+       (piece.color === WHITE && row === 0))
+    ) {
+      piece.king = true;
     }
   }
 
-  return result;
-}
+  function applyLocalMove(move) {
+    const next = cloneBoard(board);
+    const piece = next[move.from.row][move.from.col];
 
-function hasAnyMove(color) {
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      if (board[r][c]?.color !== color) {
-        continue;
-      }
+    if (!piece) return false;
 
-      if (movesFor(r, c).length > 0) {
-        return true;
-      }
-    }
-  }
+    next[move.from.row][move.from.col] = null;
+    next[move.to.row][move.to.col] = piece;
 
-  return false;
-}
-
-// ==================================================
-// AVISO DE TURNO
-// ==================================================
-
-function updateTurnBanner() {
-  if (!turnBanner || !turnTitle || !turnDescription) {
-    return;
-  }
-
-  turnBanner.classList.remove(
-    "your-turn",
-    "opponent-turn",
-    "waiting",
-    "finished"
-  );
-
-  if (blackCard) {
-    blackCard.classList.toggle(
-      "active",
-      !gameOver && turn === "black"
-    );
-  }
-
-  if (whiteCard) {
-    whiteCard.classList.toggle(
-      "active",
-      !gameOver && turn === "white"
-    );
-  }
-
-  if (gameOver) {
-    turnBanner.classList.add("finished");
-    turnTitle.textContent = "PARTIDA ENCERRADA";
-    turnDescription.textContent =
-      statusElement?.textContent || "A partida terminou.";
-    return;
-  }
-
-  if (onlineRoomCode && !onlineGameActive) {
-    turnBanner.classList.add("waiting");
-    turnTitle.textContent = "AGUARDANDO OPONENTE";
-    turnDescription.textContent =
-      "A partida começará quando o adversário entrar.";
-    return;
-  }
-
-  if (onlineRoomCode) {
-    if (turn === onlinePlayerColor) {
-      turnBanner.classList.add("your-turn");
-
-      turnTitle.textContent = movePending
-        ? "JOGADA ENVIADA"
-        : "É SUA VEZ!";
-
-      turnDescription.textContent = movePending
-        ? "Aguardando confirmação do servidor."
-        : mustContinue
-          ? "Continue capturando com a mesma peça."
-          : "Selecione uma peça e faça sua jogada.";
-    } else {
-      turnBanner.classList.add("opponent-turn");
-      turnTitle.textContent = "VEZ DO OPONENTE";
-      turnDescription.textContent =
-        "Aguarde a jogada do outro jogador.";
+    if (move.capture) {
+      next[move.capture.row][move.capture.col] = null;
     }
 
-    return;
-  }
+    promote(piece, move.to.row);
+    board = next;
 
-  turnBanner.classList.add("your-turn");
-
-  turnTitle.textContent =
-    turn === "black" ? "VEZ DAS PRETAS" : "VEZ DAS BRANCAS";
-
-  turnDescription.textContent = mustContinue
-    ? "Continue a sequência de capturas."
-    : "Selecione uma peça para jogar.";
-}
-
-// ==================================================
-// DESENHAR TABULEIRO
-// ==================================================
-
-function render() {
-  if (!boardElement || !statusElement || !board) {
-    return;
-  }
-
-  boardElement.innerHTML = "";
-
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const cell = document.createElement("button");
-
-      cell.type = "button";
-      cell.className =
-        "cell " + ((r + c) % 2 ? "dark" : "light");
-
-      cell.setAttribute(
-        "aria-label",
-        `Linha ${r + 1}, coluna ${c + 1}`
+    if (move.capture) {
+      const nextCaptures = capturesFor(
+        move.to.row,
+        move.to.col
       );
 
-      if (selected?.r === r && selected?.c === c) {
-        cell.classList.add("selected");
+      if (nextCaptures.length) {
+        mustContinue = {
+          r: move.to.row,
+          c: move.to.col
+        };
+
+        selectedPiece = {
+          row: move.to.row,
+          col: move.to.col
+        };
+
+        legalMoves = nextCaptures;
+        setStatus("Continue capturando com a mesma peça.");
+        renderBoard();
+        updateTurnBanner();
+        return;
+      }
+    }
+
+    mustContinue = null;
+    selectedPiece = null;
+    legalMoves = [];
+    turn = otherColor(turn);
+
+    if (localGameEnded()) return;
+
+    renderBoard();
+    updateTurnBanner();
+    updatePlayerCards();
+  }
+
+  function localGameEnded() {
+    let blackCount = 0;
+    let whiteCount = 0;
+    let hasMove = false;
+
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        const piece = board[r][c];
+        if (!piece) continue;
+
+        if (piece.color === BLACK) blackCount++;
+        else whiteCount++;
+
+        if (piece.color === turn) {
+          if (simpleMoves(r, c).length || capturesFor(r, c).length) {
+            hasMove = true;
+          }
+        }
+      }
+    }
+
+    if (!blackCount || !whiteCount || !hasMove) {
+      gameOver = true;
+
+      const winner = !blackCount
+        ? WHITE
+        : !whiteCount
+          ? BLACK
+          : otherColor(turn);
+
+      setStatus(
+        `${winner === BLACK ? "Pretas" : "Brancas"} venceram!`
+      );
+
+      updateTurnBanner(
+        `${winner === BLACK ? "Pretas" : "Brancas"} venceram!`,
+        "finished"
+      );
+
+      renderBoard();
+      return true;
+    }
+
+    return false;
+  }
+
+  // ------------------ CLIQUES NO TABULEIRO ------------------
+
+  function handleCellClick(r, c) {
+    // Regra fundamental:
+    // se há uma sala online, nunca executar jogada local.
+    if (onlineRoomCode) {
+      if (!onlineGameActive) {
+        setStatus("Aguardando o segundo jogador iniciar a partida.");
+        return;
       }
 
-      if (legalMoves.some(m => m.r === r && m.c === c)) {
-        cell.classList.add("target");
+      if (!socket?.connected) {
+        setStatus("Conexão perdida. Aguarde a reconexão.");
+        return;
       }
 
-      const piece = board[r][c];
+      if (gameOver || movePending) return;
 
-      if (piece) {
-        const disk = document.createElement("div");
-        disk.className = `piece ${piece.color}`;
+      if (turn !== onlinePlayerColor) {
+        setStatus("Aguarde a jogada do adversário.");
+        return;
+      }
 
-        if (piece.king) {
-          disk.classList.add("king");
-          disk.textContent = "♛";
+      const chosen = legalMoves.find(
+        m => m.to.row === r && m.to.col === c
+      );
+
+      if (chosen) {
+        sendOnlineMove(chosen);
+        return;
+      }
+
+      const piece = board[r]?.[c];
+
+      if (piece && piece.color === onlinePlayerColor) {
+        selectedPiece = { row: r, col: c };
+        legalMoves = legalMovesFor(r, c);
+        renderBoard();
+
+        if (!legalMoves.length) {
+          setStatus("Essa peça não tem jogadas disponíveis.");
         }
 
-        cell.appendChild(disk);
+        return;
       }
 
-      cell.addEventListener("click", () => {
-        clickCell(r, c);
-      });
+      if (!mustContinue) {
+        selectedPiece = null;
+        legalMoves = [];
+        renderBoard();
+      }
 
-      boardElement.appendChild(cell);
+      return;
+    }
+
+    // Modo local: permitido apenas sem uma sala online.
+    if (gameOver || movePending) return;
+
+    const chosen = legalMoves.find(
+      m => m.to.row === r && m.to.col === c
+    );
+
+    if (chosen) {
+      applyLocalMove(chosen);
+      return;
+    }
+
+    const piece = board[r]?.[c];
+
+    if (piece && piece.color === turn) {
+      selectedPiece = { row: r, col: c };
+      legalMoves = legalMovesFor(r, c);
+      renderBoard();
+
+      if (!legalMoves.length) {
+        setStatus("Essa peça não tem jogadas disponíveis.");
+      }
+
+      return;
+    }
+
+    if (!mustContinue) {
+      selectedPiece = null;
+      legalMoves = [];
+      renderBoard();
     }
   }
 
-  if (!gameOver) {
-    if (onlineRoomCode && !onlineGameActive) {
-      statusElement.textContent = "Aguardando o adversário.";
-    } else if (onlineRoomCode) {
-      statusElement.textContent =
-        turn === onlinePlayerColor
-          ? "Sua vez de jogar."
-          : "Vez do adversário.";
+  // ------------------ DESENHO DO TABULEIRO ------------------
+
+  function renderBoard() {
+    boardElement.innerHTML = "";
+
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        const cell = document.createElement("button");
+
+        cell.type = "button";
+        cell.className =
+          `cell ${(r + c) % 2 === 0 ? "light" : "dark"}`;
+
+        cell.dataset.row = String(r);
+        cell.dataset.col = String(c);
+        cell.setAttribute("aria-label", `Linha ${r + 1}, coluna ${c + 1}`);
+
+        if (
+          selectedPiece &&
+          selectedPiece.row === r &&
+          selectedPiece.col === c
+        ) {
+          cell.classList.add("selected");
+        }
+
+        if (legalMoves.some(m => m.to.row === r && m.to.col === c)) {
+          cell.classList.add("target");
+        }
+
+        const piece = board[r][c];
+
+        if (piece) {
+          const element = document.createElement("div");
+          element.className =
+            `piece ${piece.color}${piece.king ? " king" : ""}`;
+          cell.appendChild(element);
+        }
+
+        cell.addEventListener("click", () => handleCellClick(r, c));
+        boardElement.appendChild(cell);
+      }
+    }
+  }
+
+  // ------------------ STATUS E INDICADORES ------------------
+
+  function setStatus(message) {
+    statusElement.textContent = message;
+  }
+
+  function setRoomInfo(message) {
+    roomInfoElement.textContent = message;
+  }
+
+  function updateLiveStatus(active) {
+    if (!liveStatusElement || !liveStatusText) return;
+
+    liveStatusElement.classList.toggle("in-match", active);
+    liveStatusElement.classList.toggle("offline", !active);
+    liveStatusText.textContent = active ? "EM PARTIDA" : "AGUARDANDO";
+  }
+
+  function updateTurnBanner(message = null, state = null) {
+    if (!turnBannerElement) return;
+
+    turnBannerElement.classList.remove(
+      "waiting", "my-turn", "your-turn",
+      "opponent-turn", "finished"
+    );
+
+    if (state) {
+      turnBannerElement.classList.add(state);
+    } else if (gameOver) {
+      turnBannerElement.classList.add("finished");
+    } else if (!onlineRoomCode || !onlineGameActive) {
+      turnBannerElement.classList.add("waiting");
+    } else if (turn === onlinePlayerColor) {
+      turnBannerElement.classList.add("your-turn");
     } else {
-      statusElement.textContent =
-        `Vez das ${turn === "black" ? "pretas" : "brancas"}.`;
+      turnBannerElement.classList.add("opponent-turn");
+    }
+
+    if (turnTitleElement) {
+      turnTitleElement.textContent = message
+        ? message.toUpperCase()
+        : !onlineRoomCode
+          ? "MODO LOCAL"
+          : !onlineGameActive
+            ? "⏳ AGUARDANDO OPONENTE"
+            : turn === onlinePlayerColor
+              ? "⚡ É SUA VEZ!"
+              : "⏳ VEZ DO OPONENTE";
+    }
+
+    if (turnDescriptionElement) {
+      turnDescriptionElement.textContent = message ||
+        (!onlineRoomCode
+          ? "Partida local. Crie ou entre em uma sala para jogar online."
+          : !onlineGameActive
+            ? "A partida começa quando o segundo jogador entrar."
+            : mustContinue
+              ? "Continue capturando com a mesma peça."
+              : turn === onlinePlayerColor
+                ? "Selecione uma peça e faça sua jogada."
+                : "Aguarde o movimento do adversário.");
+    }
+
+    updateLiveStatus(Boolean(onlineRoomCode && onlineGameActive));
+  }
+
+  function updatePlayerCards() {
+    if (blackPlayerElement) {
+      blackPlayerElement.textContent = onlineRoomCode
+        ? onlinePlayerColor === BLACK ? "Você" : "Jogador das pretas"
+        : "Partida local";
+    }
+
+    if (whitePlayerElement) {
+      whitePlayerElement.textContent = onlineRoomCode
+        ? onlinePlayerColor === WHITE ? "Você" : "Jogador das brancas"
+        : "Partida local";
+    }
+
+    if (blackCardElement) {
+      blackCardElement.classList.toggle(
+        "active-turn",
+        Boolean(onlineGameActive && turn === BLACK)
+      );
+    }
+
+    if (whiteCardElement) {
+      whiteCardElement.classList.toggle(
+        "active-turn",
+        Boolean(onlineGameActive && turn === WHITE)
+      );
     }
   }
+
+  function messageOf(payload, fallback) {
+    if (typeof payload === "string" && payload) return payload;
+    if (payload && typeof payload.message === "string") {
+      return payload.message;
+    }
+    return fallback;
+  }
+
+  function getRoomCode(payload) {
+    const value = typeof payload === "string"
+      ? payload
+      : payload?.code ?? payload?.roomCode;
+
+    return typeof value === "string"
+      ? value.trim().toUpperCase()
+      : "";
+  }
+
+  // ------------------ SOCKET.IO ------------------
+
+function restoreOnlineRoom(payload) {
+  if (!payload || typeof payload !== "object") {
+    setStatus("Dados inválidos para recuperar a partida.");
+    return;
+  }
+
+  const snapshot = payload.snapshot || payload.state || payload;
+  const code = getRoomCode(payload) || getRoomCode(snapshot);
+  const normalized = normalizeBoard(snapshot.board);
+
+  if (!normalized) {
+    setStatus("Não foi possível recuperar o tabuleiro.");
+    return;
+  }
+
+  if (code) {
+    onlineRoomCode = code;
+    roomCodeInput.value = code;
+  }
+
+  if (payload.color === BLACK || payload.color === WHITE) {
+    onlinePlayerColor = payload.color;
+  } else if (snapshot.color === BLACK || snapshot.color === WHITE) {
+    onlinePlayerColor = snapshot.color;
+  }
+
+  if (!onlineRoomCode || !onlinePlayerColor) {
+    setStatus("Faltam dados para recuperar a sala.");
+    return;
+  }
+
+  board = normalized;
+  turn = snapshot.turn === WHITE ? WHITE : BLACK;
+
+  const continuation = snapshot.mustContinue || null;
+
+  mustContinue =
+    continuation &&
+    Number.isInteger(continuation.r) &&
+    Number.isInteger(continuation.c)
+      ? { r: continuation.r, c: continuation.c }
+      : null;
+
+  gameOver = Boolean(snapshot.gameOver);
+  selectedPiece = null;
+  legalMoves = [];
+  movePending = false;
+  onlineGameActive = Boolean(snapshot.started);
+
+  renderBoard();
+  updatePlayerCards();
+
+  setRoomInfo(`Sala ${onlineRoomCode} recuperada.`);
+  setStatus(
+    onlineGameActive
+      ? "Partida recuperada."
+      : "Sala recuperada. Aguardando o adversário."
+  );
 
   updateTurnBanner();
 }
 
-// ==================================================
-// CLIQUES NO TABULEIRO
-// ==================================================
-
-function clickCell(r, c) {
-  if (gameOver || movePending) {
-    return;
-  }
-
-  if (onlineRoomCode) {
-    if (!onlineGameActive) {
-      if (statusElement) {
-        statusElement.textContent =
-          "Aguardando o adversário entrar na sala.";
-      }
-
-      return;
-    }
-
-    clickOnlineCell(r, c);
-    return;
-  }
-
-  clickLocalCell(r, c);
-}
-
-// ==================================================
-// PARTIDA LOCAL
-// ==================================================
-
-function clickLocalCell(r, c) {
-  const chosenMove = selected
-    ? legalMoves.find(m => m.r === r && m.c === c)
-    : null;
-
-  if (chosenMove) {
-    const piece = board[selected.r][selected.c];
-
-    board[r][c] = piece;
-    board[selected.r][selected.c] = null;
-
-    if (chosenMove.capture) {
-      board[chosenMove.capture.r][chosenMove.capture.c] = null;
-    }
-
-    // Promove a peça a dama ao chegar à última linha.
-    if (
-      (piece.color === "black" && r === 7) ||
-      (piece.color === "white" && r === 0)
-    ) {
-      piece.king = true;
-    }
-
-    selected = null;
-    legalMoves = [];
-
-    // Se ainda houver captura, a mesma peça continua jogando.
-    if (
-      chosenMove.capture &&
-      movesFor(r, c, true).length > 0
-    ) {
-      mustContinue = { r, c };
-      selected = { r, c };
-      legalMoves = movesFor(r, c, true);
-
-      render();
-
-      statusElement.textContent =
-        "Continue capturando com a mesma peça.";
-
-      updateTurnBanner();
-      return;
-    }
-
-    finishLocalTurn();
-    return;
-  }
-
-  if (board[r][c]?.color === turn) {
-    if (
-      mustContinue &&
-      (r !== mustContinue.r || c !== mustContinue.c)
-    ) {
-      statusElement.textContent =
-        "Continue a captura com a mesma peça.";
-      return;
-    }
-
-    const captures = allCaptures(turn);
-
-    if (
-      !mustContinue &&
-      captures.length > 0 &&
-      !captures.some(p => p.r === r && p.c === c)
-    ) {
-      statusElement.textContent =
-        "Captura obrigatória: escolha uma peça que possa capturar.";
-      return;
-    }
-
-    selected = { r, c };
-
-    legalMoves = movesFor(
-      r,
-      c,
-      Boolean(mustContinue) || captures.length > 0
-    );
-
-    render();
-
-    if (legalMoves.length === 0) {
-      statusElement.textContent =
-        "Essa peça não tem movimentos disponíveis.";
-    }
-
-    return;
-  }
-
-  if (!mustContinue) {
-    selected = null;
-    legalMoves = [];
-    render();
-  }
-}
-
-function finishLocalTurn() {
-  mustContinue = null;
-  selected = null;
-  legalMoves = [];
-
-  turn = otherColor(turn);
-
-  if (!hasAnyMove(turn)) {
-    gameOver = true;
-
-    statusElement.textContent =
-      `Fim de jogo! ${otherColor(turn) === "black" ? "Pretas" : "Brancas"} venceram!`;
-  }
-
-  render();
-}
-
-// ==================================================
-// PARTIDA ONLINE
-// ==================================================
-
-function clickOnlineCell(r, c) {
-  if (movePending || gameOver) {
-    return;
-  }
-
-  if (!socket?.connected) {
-    statusElement.textContent =
-      "Conexão perdida com o servidor.";
-    return;
-  }
-
-  if (turn !== onlinePlayerColor) {
-    statusElement.textContent = "Aguarde a sua vez.";
-    return;
-  }
-
-  const chosenMove = selected
-    ? legalMoves.find(m => m.r === r && m.c === c)
-    : null;
-
-  if (chosenMove) {
-    movePending = true;
-
-    socket.emit("moveAttempt", {
-      from: {
-        r: selected.r,
-        c: selected.c
-      },
-      to: { r, c }
-    });
-
-    statusElement.textContent = "Enviando jogada.";
-    updateTurnBanner();
-    return;
-  }
-
-  if (board[r][c]?.color === onlinePlayerColor) {
-    if (
-      mustContinue &&
-      (r !== mustContinue.r || c !== mustContinue.c)
-    ) {
-      statusElement.textContent =
-        "Continue a captura com a mesma peça.";
-      return;
-    }
-
-    const captures = allCaptures(turn);
-
-    if (
-      !mustContinue &&
-      captures.length > 0 &&
-      !captures.some(p => p.r === r && p.c === c)
-    ) {
-      statusElement.textContent =
-        "Captura obrigatória: escolha uma peça que possa capturar.";
-      return;
-    }
-
-    selected = { r, c };
-
-    legalMoves = movesFor(
-      r,
-      c,
-      Boolean(mustContinue) || captures.length > 0
-    );
-
-    render();
-
-    if (legalMoves.length === 0) {
-      statusElement.textContent =
-        "Essa peça não tem movimentos disponíveis.";
-    }
-
-    return;
-  }
-
-  if (!mustContinue) {
-    selected = null;
-    legalMoves = [];
-    render();
-  }
-}
-
-// ==================================================
-// CONTROLES DAS SALAS
-// ==================================================
-
-function registerRoomControls() {
-  if (roomControlsRegistered) {
-    return;
-  }
-
-  if (!createRoomButton || !joinRoomButton || !roomCodeInput) {
-    console.error("Elementos de sala não encontrados no HTML.");
-    return;
-  }
-
-  roomControlsRegistered = true;
-
-  createRoomButton.addEventListener("click", () => {
-    if (!socket?.connected) {
-      if (roomInfo) {
-        roomInfo.textContent =
-          "Faça login com Google e aguarde a conexão.";
-      }
-
-      return;
-    }
-
-    if (onlineRoomCode) {
-      if (roomInfo) {
-        roomInfo.textContent = "Você já está em uma sala.";
-      }
-
-      return;
-    }
-
-    socket.emit("createRoom");
-  });
-
-  joinRoomButton.addEventListener("click", () => {
-    if (!socket?.connected) {
-      if (roomInfo) {
-        roomInfo.textContent =
-          "Faça login com Google e aguarde a conexão.";
-      }
-
-      return;
-    }
-
-    const code = roomCodeInput.value.trim().toUpperCase();
-
-    if (!code) {
-      if (roomInfo) {
-        roomInfo.textContent = "Digite o código da sala.";
-      }
-
-      return;
-    }
-
-    if (onlineRoomCode) {
-      if (roomInfo) {
-        roomInfo.textContent = "Você já está em uma sala.";
-      }
-
-      return;
-    }
-
-    socket.emit("joinRoom", code);
-  });
-
-  roomCodeInput.addEventListener("input", () => {
-    roomCodeInput.value = roomCodeInput.value
-      .toUpperCase()
-      .replace(/[^A-HJ-NP-Z2-9]/g, "");
-  });
-}
-
-// ==================================================
-// EVENTOS DO SOCKET
-// ==================================================
-
-function registerSocketEvents(gameSocket) {
-  gameSocket.on("connect", () => {
-    if (gameSocket !== socket) return;
-
-    connectingSocket = false;
-
-    console.log("Conectado ao servidor do jogo.");
-
-    if (roomInfo) {
-      roomInfo.textContent =
-        "Conectado ao servidor. Crie ou entre em uma sala.";
-    }
-  });
-
-  gameSocket.on("connect_error", error => {
-    if (gameSocket !== socket) return;
-
-    connectingSocket = false;
-
-    console.error("Erro na conexão:", error.message);
-
-    if (roomInfo) {
-      roomInfo.textContent = "Erro de conexão: " + error.message;
-    }
-  });
-
-  gameSocket.on("roomCreated", data => {
-    if (gameSocket !== socket) return;
-
-    onlineRoomCode = data.code;
-    onlinePlayerColor = data.color;
-    onlineGameActive = false;
-
-    movePending = false;
-    gameOver = false;
-    mustContinue = null;
-    selected = null;
-    legalMoves = [];
-
-    if (roomCodeInput) {
-      roomCodeInput.value = data.code;
-    }
-
-    if (roomInfo) {
-      roomInfo.textContent =
-        `Sua sala: ${data.code}. Compartilhe o código com o adversário.`;
-    }
-
-    if (blackPlayerLabel) {
-      blackPlayerLabel.textContent =
-        data.color === "black"
-          ? "Você (pretas)"
-          : "Jogador 1 (pretas)";
-    }
-
-    if (whitePlayerLabel) {
-      whitePlayerLabel.textContent = "Aguardando adversário";
-    }
-
-    if (createRoomButton) createRoomButton.disabled = true;
-    if (joinRoomButton) joinRoomButton.disabled = true;
-
-    updateTurnBanner();
-  });
-
-  gameSocket.on("roomJoined", data => {
-    if (gameSocket !== socket) return;
-
-    onlineRoomCode = data.code;
-    onlinePlayerColor = data.color;
-    onlineGameActive = false;
-
-    movePending = false;
-    gameOver = false;
-    mustContinue = null;
-    selected = null;
-    legalMoves = [];
-
-    if (roomInfo) {
-      roomInfo.textContent = `Você entrou na sala ${data.code}.`;
-    }
-
-    if (blackPlayerLabel) {
-      blackPlayerLabel.textContent =
-        data.color === "black"
-          ? "Você (pretas)"
-          : "Jogador 1 (pretas)";
-    }
-
-    if (whitePlayerLabel) {
-      whitePlayerLabel.textContent =
-        data.color === "white"
-          ? "Você (brancas)"
-          : "Jogador 2 (brancas)";
-    }
-
-    if (createRoomButton) createRoomButton.disabled = true;
-    if (joinRoomButton) joinRoomButton.disabled = true;
-
-    updateTurnBanner();
-  });
-
-  gameSocket.on("gameReady", data => {
-    if (gameSocket !== socket) return;
-
-    board = data.board;
-    turn = data.turn;
-
-    selected = null;
-    legalMoves = [];
-    mustContinue = null;
-    gameOver = false;
-    movePending = false;
-    onlineGameActive = true;
-
-    if (roomInfo) {
-      roomInfo.textContent = data.message || "Partida iniciada!";
-    }
-
-    if (statusElement) {
-      statusElement.textContent = "Partida iniciada.";
-    }
-
-    render();
-  });
-
-  gameSocket.on("boardUpdate", data => {
-    if (gameSocket !== socket) return;
-
-    board = data.board;
-    turn = data.turn;
-    mustContinue = data.mustContinue || null;
-    gameOver = Boolean(data.gameOver);
-
-    selected = null;
-    legalMoves = [];
-    movePending = false;
-
-    if (gameOver && statusElement) {
-      statusElement.textContent =
-        data.message ||
-        (data.winner === onlinePlayerColor
-          ? "Você venceu!"
-          : "Você perdeu!");
-    } else if (data.message && statusElement) {
-      statusElement.textContent = data.message;
-    }
-
-    render();
-    updateTurnBanner();
-  });
-
-  gameSocket.on("moveRejected", message => {
-    if (gameSocket !== socket) return;
-
-    movePending = false;
-    selected = null;
-    legalMoves = [];
-
-    render();
-
-    if (statusElement) {
-      statusElement.textContent =
-        typeof message === "string"
-          ? message
-          : "Jogada inválida. Tente novamente.";
-    }
-
-    updateTurnBanner();
-  });
-
-  gameSocket.on("roomError", message => {
-    if (gameSocket !== socket) return;
-
-    if (roomInfo) {
-      roomInfo.textContent =
-        typeof message === "string"
-          ? message
-          : "Não foi possível entrar na sala.";
-    }
-  });
-
-  gameSocket.on("playerLeft", data => {
-    if (gameSocket !== socket) return;
-
-    if (roomInfo) {
-      roomInfo.textContent =
-        data.message || "O adversário saiu da partida.";
+  function disconnectSocket() {
+    if (socket) {
+      socket.removeAllListeners();
+      socket.disconnect();
+      socket = null;
     }
 
     onlineRoomCode = null;
     onlinePlayerColor = null;
     onlineGameActive = false;
-
-    mustContinue = null;
-    selected = null;
-    legalMoves = [];
     movePending = false;
-    gameOver = false;
 
-    if (blackPlayerLabel) {
-      blackPlayerLabel.textContent = "Aguardando jogador";
-    }
-
-    if (whitePlayerLabel) {
-      whitePlayerLabel.textContent = "Aguardando jogador";
-    }
-
-    if (createRoomButton) createRoomButton.disabled = false;
-    if (joinRoomButton) joinRoomButton.disabled = false;
-
-    newGame();
-  });
-
-  gameSocket.on("disconnect", () => {
-    if (gameSocket !== socket) return;
-
-    movePending = false;
-    connectingSocket = false;
-
-    if (roomInfo) {
-      roomInfo.textContent = onlineRoomCode
-        ? "Conexão perdida. Tentando reconectar..."
-        : "Desconectado do servidor.";
-    }
-
+    updatePlayerCards();
     updateTurnBanner();
-  });
-}
+  }
 
-// ==================================================
-// CONEXÃO COM FIREBASE
-// ==================================================
+  function connectSocket(token) {
+    if (!token) {
+      disconnectSocket();
+      setStatus("Entre com o Google para jogar online.");
+      setRoomInfo("Faça login antes de criar ou entrar em uma sala.");
+      return;
+    }
 
-function connectGameSocket(token) {
-  if (!token) {
-    firebaseToken = null;
-    connectingSocket = false;
+    firebaseToken = token;
+
+    if (socket?.connected && socket.auth?.token === token) return;
 
     if (socket) {
+      socket.removeAllListeners();
       socket.disconnect();
       socket = null;
     }
 
-    if (roomInfo) {
-      roomInfo.textContent =
-        "Faça login com Google para jogar online.";
-    }
-
-    return;
-  }
-
-  if (token === firebaseToken && socket) {
-    return;
-  }
-
-  firebaseToken = token;
-
-  if (socket) {
-    socket.disconnect();
-    socket = null;
-  }
-
-  connectingSocket = true;
-
-  if (roomInfo) {
-    roomInfo.textContent = "Conectando ao servidor...";
-  }
-
-  const gameSocket = io({
-    auth: {
-      token: firebaseToken
-    }
-  });
-
-  socket = gameSocket;
-
-  registerSocketEvents(gameSocket);
-}
-
-// O auth.js deve emitir esse evento após login/logout.
-window.addEventListener("firebase-user-token", event => {
-  connectGameSocket(event.detail?.token || null);
-});
-
-// ==================================================
-// REINICIAR PARTIDA LOCAL
-// ==================================================
-
-if (resetButton) {
-  resetButton.addEventListener("click", () => {
-    if (onlineRoomCode) {
-      if (statusElement) {
-        statusElement.textContent =
-          "O reinício online está desativado para evitar dessincronização.";
-      }
-
+    if (typeof io !== "function") {
+      setStatus("Socket.IO não foi carregado.");
       return;
     }
 
-    newGame();
+    socket = io({
+      auth: { token },
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000
+    });
+
+    registerSocketEvents();
+  }
+
+ 
+function registerSocketEvents() {
+  socket.on("connect", () => {
+    if (onlineRoomCode) {
+      onlineGameActive = false;
+      movePending = false;
+
+      setStatus("Conexão restabelecida. Recuperando a partida...");
+      setRoomInfo(`Tentando recuperar a sala ${onlineRoomCode}...`);
+      updateTurnBanner("RECUPERANDO PARTIDA", "waiting");
+    } else {
+      setStatus("Conectado ao servidor.");
+      setRoomInfo("Conexão pronta. Crie uma sala ou entre com um código.");
+    }
   });
-}
 
-// ==================================================
-// INICIALIZAÇÃO
-// ==================================================
+  socket.on("roomResumed", payload => {
+    restoreOnlineRoom(payload);
+  });
+socket.on("playerReconnected", payload => {
+  if (!onlineRoomCode) return;
 
-registerRoomControls();
-newGame();
+  movePending = false;
 
-console.log("Script do Damas Online carregado.");
+  setStatus("O adversário reconectou. Sincronizando a partida...");
+  setRoomInfo(`Sala ${onlineRoomCode}: reconexão do adversário detectada.`);
+
+  // Solicita ao servidor uma atualização do estado da partida.
+  socket.emit("requestRoomState", {
+    code: onlineRoomCode
+  });
+});
+  socket.on("roomStateUnavailable", payload => {
+    onlineGameActive = false;
+    movePending = false;
+
+    setStatus(
+      messageOf(payload, "Não foi possível recuperar a partida.")
+    );
+
+    setRoomInfo("Verifique o estado da sala antes de sair.");
+    updateTurnBanner("RECONEXÃO NECESSÁRIA", "waiting");
+  });
+
+  socket.on("connect_error", error => {
+    setStatus("Falha ao conectar ao servidor.");
+    setRoomInfo(error?.message || "Verifique o login e o servidor.");
+  });
+
+  socket.on("disconnect", reason => {
+    onlineGameActive = false;
+    movePending = false;
+
+    setStatus("Conexão perdida. A partida online está bloqueada.");
+    setRoomInfo(`Conexão interrompida: ${reason}`);
+    updateTurnBanner("RECONEXÃO NECESSÁRIA", "waiting");
+  });
+
+  
+
+
+    socket.on("roomCreated", payload => {
+      const code = getRoomCode(payload);
+
+      if (!code) {
+        setRoomInfo("O servidor não retornou o código da sala.");
+        return;
+      }
+
+      onlineRoomCode = code;
+      onlinePlayerColor = payload.color || BLACK;
+      onlineGameActive = false;
+
+      selectedPiece = null;
+      legalMoves = [];
+      movePending = false;
+
+      roomCodeInput.value = code;
+      setRoomInfo(`Sala ${code} criada. Envie o código ao adversário.`);
+      setStatus("Aguardando o segundo jogador.");
+
+      updatePlayerCards();
+      updateTurnBanner();
+    });
+
+    socket.on("roomJoined", payload => {
+      const code = getRoomCode(payload);
+
+      if (!code) {
+        setRoomInfo("O servidor não retornou o código da sala.");
+        return;
+      }
+
+      onlineRoomCode = code;
+      onlinePlayerColor = payload.color || WHITE;
+      onlineGameActive = false;
+
+      selectedPiece = null;
+      legalMoves = [];
+      movePending = false;
+
+      setRoomInfo(`Entrou na sala ${code}. Sincronizando tabuleiro...`);
+      setStatus("Aguardando confirmação do servidor.");
+
+      updatePlayerCards();
+      updateTurnBanner();
+    });
+
+    // O servidor atual envia este evento quando o segundo jogador entra.
+   
+socket.on("gameReady", payload => {
+  if (!onlineRoomCode) return;
+
+  const normalized = normalizeBoard(payload?.board);
+
+  if (!normalized) {
+    setStatus("O servidor enviou um tabuleiro inválido.");
+    return;
+  }
+
+  board = normalized;
+  turn = payload.turn === WHITE ? WHITE : BLACK;
+
+  const continuation = payload.mustContinue;
+
+  mustContinue =
+    continuation &&
+    Number.isInteger(continuation.r) &&
+    Number.isInteger(continuation.c)
+      ? { r: continuation.r, c: continuation.c }
+      : null;
+
+  gameOver = Boolean(payload.gameOver);
+  movePending = false;
+  selectedPiece = null;
+  legalMoves = [];
+  onlineGameActive = Boolean(payload.started) && !gameOver;
+
+  setRoomInfo(`Partida sincronizada na sala ${onlineRoomCode}.`);
+  setStatus(payload.message || "Partida sincronizada!");
+
+  renderBoard();
+  updatePlayerCards();
+  updateTurnBanner();
+});
+
+
+    socket.on("roomError", payload => {
+      setRoomInfo(messageOf(payload, "Erro ao acessar a sala."));
+    });
+
+    socket.on("moveRejected", payload => {
+      movePending = false;
+      setStatus(messageOf(payload, "O servidor recusou a jogada."));
+      renderBoard();
+    });
+
+    socket.on("boardUpdate", payload => {
+      if (!onlineRoomCode) return;
+
+      const normalized = normalizeBoard(payload?.board);
+
+      if (!normalized) {
+        setStatus("Atualização de tabuleiro inválida.");
+        return;
+      }
+
+      board = normalized;
+      turn = payload.turn === WHITE ? WHITE : BLACK;
+
+      const continuation = payload.mustContinue;
+
+      mustContinue = continuation &&
+        Number.isInteger(continuation.r) &&
+        Number.isInteger(continuation.c)
+          ? { r: continuation.r, c: continuation.c }
+          : null;
+
+      gameOver = Boolean(payload.gameOver);
+      movePending = false;
+      selectedPiece = null;
+      legalMoves = [];
+
+      // Receber boardUpdate significa que a partida já começou.
+      onlineGameActive = true;
+
+      renderBoard();
+      updatePlayerCards();
+
+      if (gameOver) {
+        const winner = payload.winner;
+        const finalMessage = payload.message ||
+          (winner
+            ? `${winner === BLACK ? "Pretas" : "Brancas"} venceram!`
+            : "Partida encerrada.");
+
+        setStatus(finalMessage);
+        updateTurnBanner(finalMessage, "finished");
+      } else {
+        setStatus(payload.message || "Tabuleiro sincronizado.");
+        updateTurnBanner();
+      }
+    });
+
+    // Nome do evento enviado pelo server.js atual.
+    socket.on("playerLeft", payload => {
+      onlineGameActive = false;
+      movePending = false;
+      selectedPiece = null;
+      legalMoves = [];
+
+      setRoomInfo(messageOf(payload, "O adversário saiu da sala."));
+      setStatus("Partida interrompida. Crie uma nova sala para jogar.");
+      updateTurnBanner("AGUARDANDO OPONENTE", "waiting");
+      renderBoard();
+    });
+
+   socket.on("playerDisconnected", payload => {
+  movePending = false;
+
+  setRoomInfo(
+    messageOf(payload, "O adversário desconectou. Aguardando reconexão.")
+  );
+
+  setStatus("O adversário desconectou. Aguardando reconexão.");
+  updateTurnBanner("AGUARDANDO OPONENTE", "waiting");
+});
+
+socket.on("playerReconnected", payload => {
+  if (!onlineRoomCode) return;
+
+  movePending = false;
+
+  setStatus("Adversário reconectado. Sincronizando partida...");
+
+  socket.emit("requestRoomState");
+});
+  }
+
+  // ------------------ SALAS ------------------
+
+  function registerRoomControls() {
+    if (roomControlsRegistered) return;
+    roomControlsRegistered = true;
+
+    createRoomButton.addEventListener("click", () => {
+      if (!socket?.connected) {
+        setRoomInfo("Entre com o Google e aguarde a conexão.");
+        return;
+      }
+
+      if (onlineRoomCode) {
+        setRoomInfo("Você já está em uma sala. Saia dela antes de criar outra.");
+        return;
+      }
+
+      setRoomInfo("Criando sala...");
+      socket.emit("createRoom");
+    });
+
+    joinRoomButton.addEventListener("click", () => {
+      if (!socket?.connected) {
+        setRoomInfo("Entre com o Google e aguarde a conexão.");
+        return;
+      }
+
+      if (onlineRoomCode) {
+        setRoomInfo("Você já está em uma sala. Saia dela antes de entrar em outra.");
+        return;
+      }
+
+      const code = roomCodeInput.value.trim().toUpperCase();
+
+      // O gerador do servidor exclui I, O, 0 e 1.
+      if (!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/.test(code)) {
+        setRoomInfo("Digite um código válido de seis caracteres.");
+        return;
+      }
+
+      setRoomInfo(`Entrando na sala ${code}...`);
+      socket.emit("joinRoom", code);
+    });
+
+    roomCodeInput.addEventListener("input", () => {
+      roomCodeInput.value = roomCodeInput.value
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, "")
+        .slice(0, 6);
+    });
+  }
+
+  // ------------------ JOGADAS ONLINE ------------------
+  // IMPORTANTE:
+  // O cliente usa row/col; o servidor espera r/c.
+
+  function sendOnlineMove(move) {
+    if (!onlineRoomCode || !onlineGameActive) {
+      setStatus("A partida online ainda não está pronta.");
+      return;
+    }
+
+    if (!socket?.connected) {
+      setStatus("Sem conexão com o servidor.");
+      return;
+    }
+
+    if (movePending) return;
+
+    if (turn !== onlinePlayerColor) {
+      setStatus("Não é a sua vez.");
+      return;
+    }
+
+    movePending = true;
+
+    socket.emit("moveAttempt", {
+      from: {
+        r: move.from.row,
+        c: move.from.col
+      },
+      to: {
+        r: move.to.row,
+        c: move.to.col
+      }
+    });
+
+    setStatus("Jogada enviada. Aguardando o servidor...");
+  }
+
+  // ------------------ PARTIDA LOCAL ------------------
+
+  function startLocalGame() {
+    if (onlineRoomCode) {
+      setStatus("Você ainda está em uma sala online.");
+      setRoomInfo("Não é possível reiniciar localmente durante uma sala online.");
+      return;
+    }
+
+    resetBoard();
+    renderBoard();
+    updatePlayerCards();
+    updateTurnBanner();
+
+    setStatus("Partida local iniciada.");
+    setRoomInfo("Partida local. Crie uma sala para jogar online.");
+  }
+
+  resetButton.addEventListener("click", startLocalGame);
+
+  // ------------------ LOGIN FIREBASE ------------------
+
+  window.addEventListener("firebase-user-token", event => {
+    const token = event.detail?.token || null;
+    firebaseToken = token;
+
+    if (!token) {
+      disconnectSocket();
+      setStatus("Entre com o Google para jogar online.");
+      return;
+    }
+
+    connectSocket(token);
+  });
+
+  // ------------------ INICIALIZAÇÃO ------------------
+
+  const required = [
+    boardElement,
+    statusElement,
+    resetButton,
+    createRoomButton,
+    joinRoomButton,
+    roomCodeInput,
+    roomInfoElement
+  ];
+
+  if (required.some(element => !element)) {
+    console.error(
+      "[Damas Online] Um ou mais elementos necessários não existem no index.html."
+    );
+    return;
+  }
+
+  registerRoomControls();
+  resetBoard();
+  renderBoard();
+  updatePlayerCards();
+  updateTurnBanner();
+  updateLiveStatus(false);
+
+  setStatus("Aguardando conexão com o servidor.");
+  setRoomInfo("Entre com o Google para criar ou entrar em uma sala.");
+
+})();
