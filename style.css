@@ -858,3 +858,74 @@ h1 span {
   background: #39ff88;
   box-shadow: 0 0 12px #39ff88;
 }
+
+
+/* LOGIN DAMAS ONLINE — ARTE ORIGINAL */
+body.auth-locked { overflow: hidden; background: #020817; }
+body.auth-locked .game > :not(#auth-screen) { display: none !important; }
+#auth-screen {
+  position: fixed; inset: 0; z-index: 9999; display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(420px, .88fr);
+  min-height: 100vh; padding: clamp(18px, 3vw, 48px); overflow: auto;
+  color: #eef7ff; background: radial-gradient(ellipse at 15% 50%, #003c8a55, transparent 48%), linear-gradient(120deg,#020817,#020b1d 58%,#010611);
+  font-family: Arial, Helvetica, sans-serif;
+}
+#auth-screen[hidden] { display: none !important; }
+.auth-hero {
+  position: relative; min-height: min(850px,calc(100vh - 36px));
+  background-image: linear-gradient(90deg,transparent 75%,#02081755),url("/assets/damas-login-arte.png");
+  background-size: cover; background-position: 42% center;
+  border: 1px solid #087dff66; border-right: 0; border-radius: 22px 0 0 22px;
+  box-shadow: inset 0 0 55px #007bff22,0 0 35px #007bff16;
+}
+.auth-hero::after {
+  content: "DESAFIE. ESTRATÉGIA. VENÇA."; position: absolute; left: 8%; right: 8%; bottom: 5%;
+  text-align: center; color: #c9e7ff; letter-spacing: .22em; font-size: clamp(10px,1vw,15px); text-shadow: 0 0 12px #008cff;
+}
+.auth-card {
+  align-self: center; width: 100%; max-width: 590px; min-height: min(850px,calc(100vh - 36px));
+  display: flex; flex-direction: column; justify-content: center; padding: clamp(28px,4vw,62px);
+  border: 2px solid #087dff; border-radius: 0 22px 22px 0;
+  background: radial-gradient(ellipse at 50% 0%,#06346b55,transparent 45%),linear-gradient(145deg,#06142bfa,#020918fc);
+  box-shadow: 0 0 24px #008cff55,inset 0 0 30px #007bff16;
+}
+.auth-brand-icon { display:grid;place-items:center;width:76px;height:76px;margin:0 auto 20px;border:2px solid #00aaff;border-radius:50%;color:#00d9ff;font-size:42px;text-shadow:0 0 15px #00bfff;box-shadow:0 0 22px #008cff77,inset 0 0 18px #008cff33; }
+.auth-eyebrow { margin:0;text-align:center;color:#54caff;font-size:10px;font-weight:800;letter-spacing:3px; }
+.auth-title { margin:10px 0;text-align:center;font-size:clamp(25px,3vw,36px);letter-spacing:2px;color:#f4f9ff; }
+.auth-title span { color:#00c8ff; }
+.auth-subtitle { margin:0 0 26px;text-align:center;color:#9fc8ed;font-size:14px; }
+.auth-tabs { display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px;padding:5px;border:1px solid #075aa0;border-radius:10px;background:#020b1c; }
+.auth-tab { min-height:42px;border:0;border-radius:7px;background:transparent;color:#9dbbd8;font-weight:800; }
+.auth-tab.active { color:white;background:linear-gradient(100deg,#0756d9,#008dff);box-shadow:0 0 16px #007bff88; }
+.auth-google { display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:48px;border:1px solid #4388c9;border-radius:9px;background:#06172c;color:#eaf6ff;font-weight:700; }
+.auth-google:hover { background:#0b2850;box-shadow:0 0 15px #008cff55; }
+.google-symbol { color:#55aaff;font-size:22px;font-weight:900; }
+.auth-divider { display:flex;align-items:center;gap:12px;margin:23px 0;color:#8ab4dc;font-size:10px;letter-spacing:1px;white-space:nowrap; }
+.auth-divider::before,.auth-divider::after { content:"";flex:1;height:1px;background:#087dff; }
+#auth-form > label,.auth-password-heading label { display:block;margin:0 0 8px;color:#9bc9f2;font-size:10px;font-weight:800;letter-spacing:1.2px; }
+#auth-email,#auth-password { width:100%;min-height:54px;margin-bottom:18px;padding:13px 16px;border:1px solid #087dca;border-radius:9px;outline:none;background:#020b1b;color:white;font-size:14px; }
+#auth-email:focus,#auth-password:focus { border-color:#00d5ff;box-shadow:0 0 0 3px #00aaff25,0 0 16px #008cff33; }
+.auth-password-heading { display:flex;justify-content:space-between;align-items:center; }
+.auth-password-heading button,#auth-forgot { padding:0;border:0;background:transparent;color:#00caff;font-size:12px;cursor:pointer; }
+.auth-options { display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 0 22px; }
+.auth-remember { display:flex;align-items:center;gap:8px;color:#d9eaff;font-size:12px; }
+.auth-remember input { accent-color:#00bfff; }
+#auth-forgot[hidden] { display:none; }
+.auth-submit { width:100%;min-height:58px;border:1px solid #00e5ff;border-radius:10px;background:linear-gradient(100deg,#0646d8,#008dff);color:white;font-size:15px;font-weight:900;letter-spacing:1px;box-shadow:0 0 22px #007bff99,inset 0 1px #ffffff55;cursor:pointer; }
+.auth-submit:hover { filter:brightness(1.15); }
+.auth-submit:disabled,.auth-google:disabled { opacity:.6;cursor:wait; }
+.auth-message { min-height:34px;margin:16px 0 0;color:#9fc8ed;font-size:11px;line-height:1.5;text-align:center; }
+.auth-message.error { color:#ff8295; }
+.auth-security { margin:18px 0 0;color:#789cbe;font-size:9px;font-weight:800;letter-spacing:1px;text-align:center; }
+.auth-security span { color:#39e9a2; }
+@media(max-width:900px) {
+  #auth-screen { grid-template-columns:1fr;padding:18px; }
+  .auth-hero { display:none; }
+  .auth-card { justify-self:center;border-radius:20px;min-height:auto; }
+}
+@media(max-width:520px) {
+  #auth-screen { padding:10px;align-items:center; }
+  .auth-card { padding:26px 20px; }
+  .auth-title { font-size:27px; }
+  .auth-options { align-items:flex-start;flex-direction:column; }
+}
