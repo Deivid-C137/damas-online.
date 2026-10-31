@@ -1,6 +1,6 @@
 
 "use strict";
-
+require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const path = require("path");
@@ -46,6 +46,49 @@ const pool = new Pool({
 pool.on("error", error => {
   console.error("[PostgreSQL] Erro inesperado:", error.message);
 });
+async function getOrCreateWallet(uid) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const created = await client.query(
+      `INSERT INTO public.wallet_accounts (firebase_uid, balance)
+       VALUES ($1, 500.00)
+       ON CONFLICT (firebase_uid) DO NOTHING
+       RETURNING firebase_uid`,
+      [uid]
+    );
+
+    // Só registra os 500 créditos se a carteira acabou de ser criada.
+    if (created.rowCount === 1) {
+      await client.query(
+        `INSERT INTO public.wallet_transactions
+         (firebase_uid, type, amount, description)
+         VALUES ($1, $2, $3, $4)`,
+        [uid, "initial_credit", 500.00, "Crédito inicial da carteira"]
+      );
+    }
+
+    const result = await client.query(
+      `SELECT balance
+       FROM public.wallet_accounts
+       WHERE firebase_uid = $1`,
+      [uid]
+    );
+
+    await client.query("COMMIT");
+
+    return result.rows[0].balance;
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+
+  } finally {
+    client.release();
+  }
+}
 const SIZE = 8;
 const BLACK = "black";
 const WHITE = "white";
@@ -1048,6 +1091,34 @@ io.use(async (socket, next) => {
 
 io.on("connection", socket => {
   const uid = socket.data.uid;
+  socket.on("wallet:request", async () => {
+  try {
+    const uid = socket.data.uid;
+
+    if (!uid) {
+      socket.emit("wallet:response", {
+        success: false,
+        message: "Faça login para acessar sua carteira."
+      });
+      return;
+    }
+
+    const balance = await getOrCreateWallet(uid);
+
+    socket.emit("wallet:response", {
+      success: true,
+      balance: Number(balance)
+    });
+
+  } catch (error) {
+    console.error("[Carteira] Erro ao consultar saldo:", error);
+
+    socket.emit("wallet:response", {
+      success: false,
+      message: "Não foi possível carregar sua carteira."
+    });
+  }
+});
 
   if (!userSockets.has(uid)) {
     userSockets.set(uid, new Set());

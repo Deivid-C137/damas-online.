@@ -17,6 +17,10 @@
   const joinRoomButton = $("join-room");
   const roomCodeInput = $("room-code");
   const roomInfoElement = $("room-info");
+    // CARTEIRA VIRTUAL
+  const walletBalanceElement = $("wallet-balance");
+  const walletMessageElement = $("wallet-message");
+  const refreshWalletButton = $("refresh-wallet");
 
   const liveStatusElement = $("live-status");
   const liveStatusText = $("live-status-text");
@@ -534,7 +538,35 @@
   function setRoomInfo(message) {
     roomInfoElement.textContent = message;
   }
+  // ------------------ CARTEIRA VIRTUAL ------------------
 
+  function updateWallet(balance) {
+    if (!walletBalanceElement) return;
+
+    walletBalanceElement.textContent = Number(balance).toLocaleString(
+      "pt-BR",
+      {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }
+    );
+  }
+
+  function requestWallet() {
+    if (!socket?.connected) {
+      if (walletMessageElement) {
+        walletMessageElement.textContent =
+          "Aguardando conexão com o servidor.";
+      }
+      return;
+    }
+
+    if (walletMessageElement) {
+      walletMessageElement.textContent = "Carregando saldo...";
+    }
+
+    socket.emit("wallet:request");
+  }
   function updateLiveStatus(active) {
     if (!liveStatusElement || !liveStatusText) return;
 
@@ -749,10 +781,19 @@ function restoreOnlineRoom(payload) {
 
     registerSocketEvents();
   }
-
- 
 function registerSocketEvents() {
+
+  // =============================================
+  // CONEXÃO COM O SERVIDOR
+  // =============================================
+
   socket.on("connect", () => {
+    console.log("[SOCKET] Conectado:", socket.id);
+
+    // Solicita o saldo da carteira
+    requestWallet();
+
+    // Verifica se precisa recuperar uma sala online
     if (onlineRoomCode) {
       onlineGameActive = false;
       movePending = false;
@@ -765,6 +806,41 @@ function registerSocketEvents() {
       setRoomInfo("Conexão pronta. Crie uma sala ou entre com um código.");
     }
   });
+
+
+  // =============================================
+  // RESPOSTA DA CARTEIRA VIRTUAL
+  // =============================================
+
+  socket.on("wallet:response", (payload) => {
+
+    if (!payload || payload.success !== true) {
+      if (walletMessageElement) {
+        walletMessageElement.textContent =
+          payload?.message || "Não foi possível carregar sua carteira.";
+      }
+      return;
+    }
+
+    const balance = Number(payload.balance);
+
+    if (!Number.isFinite(balance) || balance < 0) {
+      if (walletMessageElement) {
+        walletMessageElement.textContent =
+          "O servidor retornou um saldo inválido.";
+      }
+      return;
+    }
+
+    updateWallet(balance);
+
+    if (walletMessageElement) {
+      walletMessageElement.textContent =
+        "Carteira sincronizada com sucesso.";
+    }
+  });
+ 
+
 
   socket.on("roomResumed", payload => {
     restoreOnlineRoom(payload);
@@ -978,15 +1054,7 @@ socket.on("gameReady", payload => {
   updateTurnBanner("AGUARDANDO OPONENTE", "waiting");
 });
 
-socket.on("playerReconnected", payload => {
-  if (!onlineRoomCode) return;
 
-  movePending = false;
-
-  setStatus("Adversário reconectado. Sincronizando partida...");
-
-  socket.emit("requestRoomState");
-});
   }
 
   // ------------------ SALAS ------------------
@@ -1098,6 +1166,10 @@ socket.on("playerReconnected", payload => {
   }
 
   resetButton.addEventListener("click", startLocalGame);
+  
+  if (refreshWalletButton) {
+  refreshWalletButton.addEventListener("click", requestWallet);
+}
 
   // ------------------ LOGIN FIREBASE ------------------
 
