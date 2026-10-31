@@ -5,6 +5,7 @@ const express = require("express");
 const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
+const { Pool } = require("pg");
 
 const { Server } = require("socket.io");
 const {
@@ -28,6 +29,23 @@ const io = new Server(httpServer, {
 });
 
 const PORT = Number(process.env.PORT) || 3000;
+// ======================================================
+// CONEXÃO COM O POSTGRESQL — SUPABASE
+// ======================================================
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_SSL === "true"
+    ? { rejectUnauthorized: false }
+    : false,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000
+});
+
+pool.on("error", error => {
+  console.error("[PostgreSQL] Erro inesperado:", error.message);
+});
 const SIZE = 8;
 const BLACK = "black";
 const WHITE = "white";
@@ -92,11 +110,34 @@ app.get("/health", (_req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+app.get("/health/db", async (_req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT NOW() AS database_time"
+    );
 
+    res.json({
+      status: "ok",
+      database: "connected",
+      time: result.rows[0].database_time
+    });
+  } catch (error) {
+    console.error("[PostgreSQL] Falha no teste:", error.message);
+
+    res.status(503).json({
+      status: "error",
+      database: "disconnected"
+    });
+  }
+});
 app.use(express.static(__dirname));
 
 app.get(/.*/, (req, res, next) => {
-  if (req.path.startsWith("/socket.io/") || req.path === "/health") {
+    if (
+    req.path.startsWith("/socket.io/") ||
+    req.path === "/health" ||
+    req.path === "/health/db"
+  ) {
     return next();
   }
 
