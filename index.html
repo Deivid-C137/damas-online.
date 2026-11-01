@@ -205,7 +205,67 @@
             ↻ Nova partida local
           </button>
         </section>
+        <!-- SISTEMA DE APOSTAS -->
+        <section id="bet-panel" class="panel bet-panel">
+          <span class="eyebrow">DESAFIO ENTRE JOGADORES</span>
+          <h2>Aposta virtual</h2>
 
+          <p class="bet-description">
+            Combine uma aposta fictícia com seu adversário.
+          </p>
+
+          <div class="bet-input-group">
+            <label for="bet-amount">VALOR DA APOSTA</label>
+
+            <input
+              id="bet-amount"
+              type="number"
+              min="0.01"
+              max="5"
+              step="0.01"
+              value="5"
+              placeholder="Máximo: 5 créditos"
+            >
+          </div>
+
+          <button
+            id="bet-create"
+            class="btn btn-primary"
+            type="button"
+          >
+            Enviar pedido de aposta
+          </button>
+
+          <div id="bet-response-area" hidden>
+            <p id="bet-request-message"></p>
+
+            <div class="bet-actions">
+              <button
+                id="bet-accept"
+                class="btn btn-primary"
+                type="button"
+              >
+                Aceitar
+              </button>
+
+              <button
+                id="bet-decline"
+                class="btn btn-secondary"
+                type="button"
+              >
+                Recusar
+              </button>
+            </div>
+          </div>
+
+          <p id="bet-status" class="wallet-message" role="status">
+            Aguardando uma aposta.
+          </p>
+
+          <p class="wallet-notice">
+            Limite de 5 créditos por jogador. Sem dinheiro real.
+          </p>
+        </section>
       </aside>
 
       <!-- TABULEIRO -->
@@ -278,7 +338,47 @@
       </section>
 
     </section>
+<!-- TELA DE DESCONEXÃO -->
+<div id="disconnect-overlay" class="disconnect-overlay" hidden>
+  <div class="disconnect-modal">
 
+    <div class="disconnect-icon">⌁</div>
+
+    <h2>DESCONECTADO</h2>
+
+    <p class="disconnect-description">
+      Você perdeu a conexão com a partida.
+    </p>
+
+    <p class="disconnect-status">
+      Tentando reconectar...
+    </p>
+
+    <div class="disconnect-divider"></div>
+
+    <span class="disconnect-label">
+      TEMPO PARA RECONEXÃO
+    </span>
+
+    <div id="disconnect-countdown" class="disconnect-countdown">
+      02:00
+    </div>
+
+    <p class="disconnect-warning">
+      Se você não reconectar antes do tempo acabar,
+      poderá perder a partida por abandono.
+    </p>
+
+    <button
+      id="reconnect-button"
+      class="btn-reconnect"
+      type="button"
+    >
+      TENTAR RECONEXÃO AGORA
+    </button>
+
+  </div>
+</div>
     <!-- RODAPÉ -->
     <footer class="footer">
       <span>

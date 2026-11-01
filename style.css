@@ -929,3 +929,283 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
   .auth-title { font-size:27px; }
   .auth-options { align-items:flex-start;flex-direction:column; }
 }
+
+/* =========================================
+   TELA DE DESCONEXÃO — NEON VERMELHO
+   ========================================= */
+
+.disconnect-overlay[hidden] {
+  display: none !important;
+}
+
+.disconnect-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.88);
+  backdrop-filter: blur(7px);
+  animation: disconnect-fade 0.3s ease;
+}
+
+.disconnect-modal {
+  position: relative;
+  width: min(100%, 650px);
+  padding: 42px 35px;
+  overflow: hidden;
+  text-align: center;
+  border: 2px solid #ff263f;
+  border-radius: 18px;
+  background:
+    radial-gradient(ellipse at top, #4b0714 0%, transparent 65%),
+    linear-gradient(145deg, #16060b, #050507);
+  box-shadow:
+    0 0 10px #ff263f,
+    0 0 30px #ff263f99,
+    0 0 75px #ff102b55,
+    inset 0 0 35px #ff102b18;
+  animation: disconnect-glow 1.8s ease-in-out infinite;
+}
+
+.disconnect-icon {
+  margin-bottom: 12px;
+  color: #ff263f;
+  font-size: 72px;
+  line-height: 1;
+  text-shadow:
+    0 0 10px #ff263f,
+    0 0 30px #ff263f;
+}
+
+.disconnect-modal h2 {
+  margin: 10px 0;
+  color: #ff3049;
+  font-size: clamp(28px, 6vw, 46px);
+  letter-spacing: 4px;
+  text-shadow:
+    0 0 8px #ff263f,
+    0 0 25px #ff263f;
+}
+
+.disconnect-description,
+.disconnect-status {
+  color: #f5dfe3;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.disconnect-status {
+  color: #ff8998;
+}
+
+.disconnect-divider {
+  height: 1px;
+  margin: 25px 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #ff263f,
+    transparent
+  );
+  box-shadow: 0 0 12px #ff263f;
+}
+
+.disconnect-label {
+  color: #ff5368;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 2px;
+}
+
+.disconnect-countdown {
+  width: fit-content;
+  min-width: 220px;
+  margin: 12px auto 18px;
+  padding: 12px 25px;
+  border: 2px solid #ff263f;
+  border-radius: 10px;
+  color: #ff5268;
+  font-size: clamp(42px, 9vw, 65px);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 15px #ff263f;
+  box-shadow:
+    0 0 12px #ff263f88,
+    inset 0 0 15px #ff263f22;
+}
+
+.disconnect-warning {
+  max-width: 470px;
+  margin: 15px auto 25px;
+  color: #d8c5ca;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.btn-reconnect {
+  width: min(100%, 430px);
+  min-height: 58px;
+  padding: 14px;
+  border: 2px solid #ff5268;
+  border-radius: 10px;
+  background: linear-gradient(100deg, #790b20, #c51432);
+  color: white;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  box-shadow:
+    0 0 12px #ff263f88,
+    0 0 28px #ff263f44;
+  transition: 0.2s ease;
+}
+
+.btn-reconnect:hover {
+  background: #ed1839;
+  box-shadow:
+    0 0 18px #ff263f,
+    0 0 40px #ff263f88;
+  transform: translateY(-2px);
+}
+
+.btn-reconnect:active {
+  transform: scale(0.98);
+}
+
+@keyframes disconnect-glow {
+  0%, 100% {
+    box-shadow:
+      0 0 10px #ff263f,
+      0 0 30px #ff263f77,
+      0 0 65px #ff102b33,
+      inset 0 0 25px #ff102b15;
+  }
+
+  50% {
+    box-shadow:
+      0 0 16px #ff263f,
+      0 0 45px #ff263fbb,
+      0 0 90px #ff102b66,
+      inset 0 0 40px #ff102b25;
+  }
+}
+
+@keyframes disconnect-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 560px) {
+  .disconnect-modal {
+    padding: 30px 18px;
+  }
+
+  .disconnect-icon {
+    font-size: 55px;
+  }
+
+  .disconnect-modal h2 {
+    letter-spacing: 2px;
+  }
+
+  .disconnect-description,
+  .disconnect-status {
+    font-size: 14px;
+  }
+
+  .disconnect-countdown {
+    min-width: 190px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disconnect-modal {
+    animation: none;
+  }
+}
+/* =========================================
+   PAINEL DE APOSTAS VIRTUAIS
+   ========================================= */
+
+.bet-panel {
+  border-color: #59417d;
+  background:
+    radial-gradient(ellipse at top right, #49306c55, transparent 65%),
+    linear-gradient(145deg, #17182f, #101323);
+}
+
+.bet-description {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bet-input-group {
+  margin-bottom: 15px;
+}
+
+.bet-input-group label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--purple);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+}
+
+#bet-amount {
+  width: 100%;
+  min-height: 44px;
+  padding: 11px;
+  border: 1px solid #59417d;
+  border-radius: 9px;
+  outline: none;
+  background: #0b1020;
+  color: white;
+}
+
+#bet-amount:focus {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 2px #a78bfa25;
+}
+
+.bet-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.bet-actions button {
+  flex: 1;
+}
+
+#bet-response-area {
+  margin-top: 15px;
+  padding: 13px;
+  border: 1px solid #59417d;
+  border-radius: 10px;
+  background: #17132a;
+}
+
+#bet-response-area[hidden] {
+  display: none !important;
+}
+
+#bet-request-message {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+#bet-status {
+  margin-top: 15px;
+}

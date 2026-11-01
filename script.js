@@ -3,7 +3,7 @@
 
 (() => {
   // =====================================================
-  // DAMAS ONLINE — CLIENTE MULTIPLAYER
+  // DAMAS ONLINE  CLIENTE MULTIPLAYER
   // Compatível com os IDs do index.html enviado.
   // O servidor é a autoridade da partida online.
   // =====================================================
@@ -21,7 +21,14 @@
   const walletBalanceElement = $("wallet-balance");
   const walletMessageElement = $("wallet-message");
   const refreshWalletButton = $("refresh-wallet");
-
+// SISTEMA DE APOSTAS
+const betAmountInput = $("bet-amount");
+const betCreateButton = $("bet-create");
+const betResponseArea = $("bet-response-area");
+const betRequestMessage = $("bet-request-message");
+const betAcceptButton = $("bet-accept");
+const betDeclineButton = $("bet-decline");
+const betStatusElement = $("bet-status");
   const liveStatusElement = $("live-status");
   const liveStatusText = $("live-status-text");
   const turnBannerElement = $("turn-banner");
@@ -1053,61 +1060,157 @@ socket.on("gameReady", payload => {
   setStatus("O adversário desconectou. Aguardando reconexão.");
   updateTurnBanner("AGUARDANDO OPONENTE", "waiting");
 });
+socket.on("playerDisconnected", payload => {
+  movePending = false;
 
+  setRoomInfo(
+    messageOf(payload, "O adversário desconectou. Aguardando reconexão.")
+  );
+
+  setStatus("O adversário desconectou. Aguardando reconexão.");
+  updateTurnBanner("AGUARDANDO OPONENTE", "waiting");
+});
+
+// =============================================
+// SISTEMA DE APOSTAS VIRTUAIS
+// =============================================
+
+socket.on("bet:created", data => {
+  betResponseArea.hidden = false;
+
+  betRequestMessage.textContent =
+    `Seu adversário propôs uma aposta de ${Number(data.amount).toFixed(2)} créditos. Deseja aceitar?`;
+
+  betStatusElement.textContent = "Você recebeu um pedido de aposta.";
+});
+
+socket.on("bet:sent", data => {
+  betResponseArea.hidden = true;
+  betStatusElement.textContent = data.message;
+});
+
+socket.on("bet:response", data => {
+  betResponseArea.hidden = true;
+  betStatusElement.textContent = data.message;
+
+  if (data.accepted) {
+    requestWallet();
+  }
+});
+
+socket.on("bet:error", data => {
+  betStatusElement.textContent =
+    data.message || "Não foi possível processar a aposta.";
+});
 
   }
 
   // ------------------ SALAS ------------------
 
-  function registerRoomControls() {
-    if (roomControlsRegistered) return;
-    roomControlsRegistered = true;
+  // ------------------ SALAS ------------------
 
-    createRoomButton.addEventListener("click", () => {
-      if (!socket?.connected) {
-        setRoomInfo("Entre com o Google e aguarde a conexão.");
-        return;
-      }
+function registerRoomControls() {
+  if (roomControlsRegistered) return;
+  roomControlsRegistered = true;
 
-      if (onlineRoomCode) {
-        setRoomInfo("Você já está em uma sala. Saia dela antes de criar outra.");
-        return;
-      }
+  createRoomButton.addEventListener("click", () => {
+    if (!socket?.connected) {
+      setRoomInfo("Entre com o Google e aguarde a conexão.");
+      return;
+    }
 
-      setRoomInfo("Criando sala...");
-      socket.emit("createRoom");
-    });
+    if (onlineRoomCode) {
+      setRoomInfo("Você já está em uma sala. Saia dela antes de criar outra.");
+      return;
+    }
 
-    joinRoomButton.addEventListener("click", () => {
-      if (!socket?.connected) {
-        setRoomInfo("Entre com o Google e aguarde a conexão.");
-        return;
-      }
+    setRoomInfo("Criando sala...");
+    socket.emit("createRoom");
+  });
 
-      if (onlineRoomCode) {
-        setRoomInfo("Você já está em uma sala. Saia dela antes de entrar em outra.");
-        return;
-      }
+  joinRoomButton.addEventListener("click", () => {
+    if (!socket?.connected) {
+      setRoomInfo("Entre com o Google e aguarde a conexão.");
+      return;
+    }
 
-      const code = roomCodeInput.value.trim().toUpperCase();
+    if (onlineRoomCode) {
+      setRoomInfo("Você já está em uma sala. Saia dela antes de entrar em outra.");
+      return;
+    }
 
-      // O gerador do servidor exclui I, O, 0 e 1.
-      if (!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/.test(code)) {
-        setRoomInfo("Digite um código válido de seis caracteres.");
-        return;
-      }
+    const code = roomCodeInput.value.trim().toUpperCase();
 
-      setRoomInfo(`Entrando na sala ${code}...`);
-      socket.emit("joinRoom", code);
-    });
+    if (!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/.test(code)) {
+      setRoomInfo("Digite um código válido de seis caracteres.");
+      return;
+    }
 
-    roomCodeInput.addEventListener("input", () => {
-      roomCodeInput.value = roomCodeInput.value
-        .toUpperCase()
-        .replace(/[^A-Z0-9]/g, "")
-        .slice(0, 6);
-    });
+    setRoomInfo(`Entrando na sala ${code}...`);
+    socket.emit("joinRoom", code);
+  });
+
+  roomCodeInput.addEventListener("input", () => {
+    roomCodeInput.value = roomCodeInput.value
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 6);
+  });
+}
+
+// ------------------ CONTROLES DAS APOSTAS ------------------
+
+function registerBetControls() {
+  if (!betCreateButton || !betAcceptButton || !betDeclineButton) {
+    console.error("[Apostas] Botões não encontrados no HTML.");
+    return;
   }
+
+  betCreateButton.addEventListener("click", () => {
+    const amount = Number(betAmountInput.value);
+
+    if (!socket?.connected) {
+      betStatusElement.textContent = "Você não está conectado ao servidor.";
+      return;
+    }
+
+    if (!onlineRoomCode || !onlineGameActive) {
+      betStatusElement.textContent = "Entre em uma partida online antes de apostar.";
+      return;
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 5) {
+      betStatusElement.textContent =
+        "A aposta deve ser maior que zero e de no máximo 5 créditos.";
+      return;
+    }
+
+    betStatusElement.textContent = "Enviando pedido de aposta...";
+    betCreateButton.disabled = true;
+
+    socket.emit("bet:create", { amount });
+  });
+
+  betAcceptButton.addEventListener("click", () => {
+    if (!socket?.connected) return;
+
+    betStatusElement.textContent = "Enviando resposta...";
+    betAcceptButton.disabled = true;
+    betDeclineButton.disabled = true;
+
+    socket.emit("bet:respond", { accepted: true });
+  });
+
+  betDeclineButton.addEventListener("click", () => {
+    if (!socket?.connected) return;
+
+    betStatusElement.textContent = "Recusando aposta...";
+    betAcceptButton.disabled = true;
+    betDeclineButton.disabled = true;
+
+    socket.emit("bet:respond", { accepted: false });
+  });
+}
 
   // ------------------ JOGADAS ONLINE ------------------
   // IMPORTANTE:
@@ -1166,7 +1269,7 @@ socket.on("gameReady", payload => {
   }
 
   resetButton.addEventListener("click", startLocalGame);
-  
+
   if (refreshWalletButton) {
   refreshWalletButton.addEventListener("click", requestWallet);
 }
@@ -1206,13 +1309,15 @@ socket.on("gameReady", payload => {
   }
 
   registerRoomControls();
-  resetBoard();
-  renderBoard();
-  updatePlayerCards();
-  updateTurnBanner();
-  updateLiveStatus(false);
+registerBetControls();
 
-  setStatus("Aguardando conexão com o servidor.");
-  setRoomInfo("Entre com o Google para criar ou entrar em uma sala.");
+resetBoard();
+renderBoard();
+updatePlayerCards();
+updateTurnBanner();
+updateLiveStatus(false);
+
+setStatus("Aguardando conexão com o servidor.");
+setRoomInfo("Entre com o Google para criar ou entrar em uma sala.");
 
 })();

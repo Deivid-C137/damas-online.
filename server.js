@@ -89,6 +89,20 @@ async function getOrCreateWallet(uid) {
     client.release();
   }
 }
+async function getWalletBalance(uid) {
+  const result = await pool.query(
+    `SELECT balance
+     FROM public.wallet_accounts
+     WHERE firebase_uid = $1`,
+    [uid]
+  );
+
+  if (result.rowCount === 0) {
+    throw new Error("Carteira do jogador não encontrada.");
+  }
+
+  return Number(result.rows[0].balance);
+}
 const SIZE = 8;
 const BLACK = "black";
 const WHITE = "white";
@@ -295,6 +309,11 @@ function roomSnapshot(room) {
     gameOver: room.gameOver,
     winner: room.winner,
     started: room.started,
+    bet: room.bet ? {
+  id: room.bet.id,
+  amount: room.bet.amount,
+  status: room.bet.status
+} : null,
     players: {
       black: Boolean(room.players.black),
       white: Boolean(room.players.white)
@@ -322,8 +341,11 @@ function createRoomState(code, socketId, uid) {
     capturedThisTurn: [],
 
     gameOver: false,
-    winner: null,
-    started: false,
+winner: null,
+started: false,
+
+// SISTEMA DE APOSTAS
+bet: null,
 
     createdAt: Date.now(),
     lastMoveAt: null
@@ -694,13 +716,405 @@ function broadcastBoard(room, message) {
     message
   });
 }
+// ======================================================
+// VALIDAÇÃO DE APOSTAS
+// ======================================================
 
-function finishGame(room, winner, message) {
+function validateBetAmount(amount) {
+  const value = Number(amount);
+
+  if (!Number.isFinite(value) || value <= 0 || value > 5) {
+    return {
+      valid: false,
+      message: "A aposta deve ser maior que zero e de no máximo 5 créditos."
+    };
+  }
+
+  return {
+    valid: true,
+    amount: Math.round(value * 100) / 100
+  };
+}
+// ======================================================
+// CRIAR PEDIDO DE APOSTA
+// ======================================================
+async function createBetRequest(room, creatorUid, amount) {
+  const validation = validateBetAmount(amount);
+
+  if (!validation.valid) {
+    throw new Error(validation.message);
+  }
+
+  if (!room.started || room.gameOver) {
+    throw new Error("A partida não está disponível para apostas.");
+  }
+
+  if (!room.playerUids.black || !room.playerUids.white) {
+    throw new Error("Os dois jogadores precisam estar na sala.");
+  }
+
+  if (room.bet) {
+    throw new Error("Esta partida já possui uma aposta.");
+  }
+
+  const opponentUid = creatorUid === room.playerUids.black
+    ? room.playerUids.white
+    : creatorUid === room.playerUids.white
+      ? room.playerUids.black
+      : null;
+
+  if (!opponentUid) {
+    throw new Error("Você não pertence a esta partida.");
+  }
+
+  const balance = await getWalletBalance(creatorUid);
+
+  if (balance < validation.amount) {
+    throw new Error("Saldo insuficiente para essa aposta.");
+  }
+
+  let result;
+
+  try {
+    result = await pool.query(
+      `INSERT INTO public.bets
+        (room_code, creator_uid, opponent_uid, amount, status)
+       VALUES ($1, $2, $3, $4, 'pending')
+       RETURNING id`,
+      [room.code, creatorUid, opponentUid, validation.amount]
+    );
+  } catch (error) {
+    if (error.code === "23505") {
+      throw new Error(
+        "Esta sala já possui uma aposta pendente ou ativa."
+      );
+    }
+
+    throw error;
+  }
+
+  room.bet = {
+    id: result.rows[0].id,
+    creatorUid,
+    opponentUid,
+    amount: validation.amount,
+    status: "pending"
+  };
+
+  return room.bet;
+}
+
+// ======================================================
+// RESPONDER AO PEDIDO DE APOSTA
+// ======================================================
+
+async function respondToBet(room, opponentUid, accepted) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    if (!room.bet || room.bet.status !== "pending") {
+      throw new Error("Não existe uma aposta pendente.");
+    }
+
+    if (room.bet.opponentUid !== opponentUid) {
+      throw new Error("Somente o adversário pode responder à aposta.");
+    }
+
+    if (accepted !== true && accepted !== false) {
+      throw new Error("Resposta de aposta inválida.");
+    }
+
+    const betResult = await client.query(
+      `SELECT *
+       FROM public.bets
+       WHERE id = $1
+       FOR UPDATE`,
+      [room.bet.id]
+    );
+
+    if (betResult.rowCount !== 1 ||
+        betResult.rows[0].status !== "pending") {
+      throw new Error("Esta aposta já foi respondida.");
+    }
+
+    const bet = betResult.rows[0];
+
+    if (!accepted) {
+      await client.query(
+        `UPDATE public.bets
+         SET status = 'cancelled'
+         WHERE id = $1`,
+        [bet.id]
+      );
+
+      await client.query("COMMIT");
+
+      room.bet.status = "cancelled";
+
+      return {
+        accepted: false,
+        status: "cancelled",
+        message: "A aposta foi recusada."
+      };
+    }
+
+    const players = [bet.creator_uid, bet.opponent_uid].sort();
+
+    const wallets = await client.query(
+      `SELECT firebase_uid, balance
+       FROM public.wallet_accounts
+       WHERE firebase_uid = ANY($1::text[])
+       ORDER BY firebase_uid
+       FOR UPDATE`,
+      [players]
+    );
+
+    if (wallets.rowCount !== 2) {
+      throw new Error("Não foi possível localizar as duas carteiras.");
+    }
+
+    const amount = Number(bet.amount);
+
+    for (const wallet of wallets.rows) {
+      if (Number(wallet.balance) < amount) {
+        throw new Error("Um dos jogadores não possui saldo suficiente.");
+      }
+    }
+
+    for (const uid of players) {
+      await client.query(
+        `UPDATE public.wallet_accounts
+         SET balance = balance - $1,
+             updated_at = NOW()
+         WHERE firebase_uid = $2`,
+        [amount, uid]
+      );
+
+      await client.query(
+        `INSERT INTO public.bet_transactions
+         (bet_id, firebase_uid, type, amount, idempotency_key)
+         VALUES ($1, $2, 'stake_reserved', $3, $4)`,
+        [bet.id, uid, amount, `bet:${bet.id}:reserve:${uid}`]
+      );
+
+      await client.query(
+        `INSERT INTO public.wallet_transactions
+         (firebase_uid, type, amount, description)
+         VALUES ($1, $2, $3, $4)`,
+        [uid, "stake_reserved", -amount, `Reserva da aposta ${bet.id}`]
+      );
+    }
+
+    await client.query(
+      `UPDATE public.bets
+       SET status = 'reserved',
+           accepted_at = NOW()
+       WHERE id = $1`,
+      [bet.id]
+    );
+
+    await client.query("COMMIT");
+
+    room.bet.status = "reserved";
+
+    return {
+      accepted: true,
+      status: "reserved",
+      amount,
+      message: "Aposta aceita! Créditos dos dois jogadores reservados."
+    };
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+
+  } finally {
+    client.release();
+  }
+}
+// ======================================================
+// PAGAMENTO DO VENCEDOR DA APOSTA
+// ======================================================
+
+async function settleBet(room, winnerColor) {
+  if (!room.bet || room.bet.status !== "reserved") {
+    return null;
+  }
+
+  const winnerUid = room.playerUids[winnerColor];
+
+  if (!winnerUid) {
+    throw new Error("Não foi possível identificar o vencedor.");
+  }
+
+  const betId = room.bet.id;
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const betResult = await client.query(
+      `SELECT *
+       FROM public.bets
+       WHERE id = $1
+       FOR UPDATE`,
+      [betId]
+    );
+
+    if (
+      betResult.rowCount !== 1 ||
+      betResult.rows[0].status !== "reserved"
+    ) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const bet = betResult.rows[0];
+
+    if (
+      winnerUid !== bet.creator_uid &&
+      winnerUid !== bet.opponent_uid
+    ) {
+      throw new Error("O vencedor não pertence a esta aposta.");
+    }
+
+    const loserUid =
+      winnerUid === bet.creator_uid
+        ? bet.opponent_uid
+        : bet.creator_uid;
+
+    const amount = Number(bet.amount);
+    const commission = Math.round(amount * 10) / 100;
+    const payout = amount * 2 - commission;
+
+    const players = [winnerUid, loserUid].sort();
+
+    const wallets = await client.query(
+      `SELECT firebase_uid
+       FROM public.wallet_accounts
+       WHERE firebase_uid = ANY($1::text[])
+       ORDER BY firebase_uid
+       FOR UPDATE`,
+      [players]
+    );
+
+    if (wallets.rowCount !== 2) {
+      throw new Error("Não foi possível localizar as carteiras.");
+    }
+
+    await client.query(
+      `UPDATE public.wallet_accounts
+       SET balance = balance + $1,
+           updated_at = NOW()
+       WHERE firebase_uid = $2`,
+      [payout, winnerUid]
+    );
+
+    await client.query(
+      `INSERT INTO public.bet_transactions
+       (bet_id, firebase_uid, type, amount, idempotency_key)
+       VALUES ($1, $2, 'winner_payout', $3, $4)`,
+      [
+        betId,
+        winnerUid,
+        payout,
+        `bet:${betId}:payout:${winnerUid}`
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO public.bet_transactions
+       (bet_id, firebase_uid, type, amount, idempotency_key)
+       VALUES ($1, $2, 'commission', $3, $4)`,
+      [
+        betId,
+        loserUid,
+        commission,
+        `bet:${betId}:commission`
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO public.wallet_transactions
+       (firebase_uid, type, amount, description)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        winnerUid,
+        "bet_payout",
+        payout,
+        `Prêmio da aposta ${betId}, já descontada a comissão`
+      ]
+    );
+
+    await client.query(
+      `UPDATE public.bets
+       SET status = 'finished',
+           winner_uid = $1,
+           settled_at = NOW()
+       WHERE id = $2`,
+      [winnerUid, betId]
+    );
+
+    await client.query("COMMIT");
+
+    room.bet.status = "finished";
+
+    console.log(
+      `[Aposta] ${betId}: vencedor recebeu ${payout.toFixed(2)} créditos.`
+    );
+
+    return {
+      winnerUid,
+      loserUid,
+      payout,
+      commission
+    };
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+
+  } finally {
+    client.release();
+  }
+}
+async function finishGame(room, winner, message) {
   room.gameOver = true;
   room.winner = winner;
   room.mustContinue = null;
 
   removeCapturedPieces(room);
+
+  let betResult = null;
+
+  try {
+    betResult = await settleBet(room, winner);
+
+    // Atualiza o saldo dos dois jogadores.
+    if (betResult) {
+      for (const uid of [betResult.winnerUid, betResult.loserUid]) {
+        const balance = await getWalletBalance(uid);
+        const socketIds = userSockets.get(uid) || new Set();
+
+        for (const socketId of socketIds) {
+          io.to(socketId).emit("wallet:response", {
+            success: true,
+            balance
+          });
+        }
+      }
+
+      message += ` Prêmio recebido: ${betResult.payout.toFixed(2)} créditos.`;
+    }
+  } catch (error) {
+    console.error("[Aposta] Erro ao pagar vencedor:", error);
+
+    io.to(room.code).emit("bet:error", {
+      message: "A partida terminou, mas houve um erro ao processar o prêmio. Entre em contato com o suporte."
+    });
+  }
 
   const result = {
     ...roomSnapshot(room),
@@ -712,22 +1126,22 @@ function finishGame(room, winner, message) {
   io.to(room.code).emit("boardUpdate", result);
   io.to(room.code).emit("gameOver", result);
 }
-
-function checkGameEnd(room) {
+ 
+async function checkGameEnd(room) {
   if (countPieces(room, BLACK) === 0) {
-    finishGame(room, WHITE, "As brancas venceram!");
+    await finishGame(room, WHITE, "As brancas venceram!");
     return true;
   }
 
   if (countPieces(room, WHITE) === 0) {
-    finishGame(room, BLACK, "As pretas venceram!");
+    await finishGame(room, BLACK, "As pretas venceram!");
     return true;
   }
 
   if (!hasAnyLegalMove(room, room.turn)) {
     const winner = otherColor(room.turn);
 
-    finishGame(
+    await finishGame(
       room,
       winner,
       `${winner === BLACK ? "As pretas" : "As brancas"} venceram!`
@@ -738,6 +1152,7 @@ function checkGameEnd(room) {
 
   return false;
 }
+  
 
 // ======================================================
 // JOGADAS
@@ -751,8 +1166,7 @@ function parseCoordinate(value) {
 
   return inside(r, c) ? { r, c } : null;
 }
-
-function handleMoveAttempt(socket, payload) {
+async function handleMoveAttempt(socket, payload) {
   const room = getSocketRoom(socket);
 
   if (!room) {
@@ -845,7 +1259,7 @@ function handleMoveAttempt(socket, payload) {
   room.turn = otherColor(room.turn);
   room.lastMoveAt = Date.now();
 
-  if (checkGameEnd(room)) return;
+if (await checkGameEnd(room)) return;
 
   broadcastBoard(room, "Jogada sincronizada.");
 }
@@ -1134,8 +1548,86 @@ io.on("connection", socket => {
 
   // Os eventos são registrados antes da tentativa de recuperação.
   socket.on("createRoom", () => createRoom(socket));
+  // SISTEMA DE APOSTAS
+socket.on("bet:create", async payload => {
+  try {
+    const room = getSocketRoom(socket);
+
+    if (!room) {
+      throw new Error("Você não está em uma sala.");
+    }
+
+    const opponentColor =
+      room.playerUids.black === socket.data.uid ? WHITE : BLACK;
+
+    const opponentSocketId = room.players[opponentColor];
+
+    if (!opponentSocketId) {
+      throw new Error("O adversário está desconectado.");
+    }
+
+    const bet = await createBetRequest(
+      room,
+      socket.data.uid,
+      payload?.amount
+    );
+
+    const betInfo = {
+      id: bet.id,
+      amount: bet.amount,
+      status: bet.status,
+      message: "Seu adversário enviou um pedido de aposta."
+    };
+
+    io.to(opponentSocketId).emit("bet:created", betInfo);
+
+    socket.emit("bet:sent", {
+      id: bet.id,
+      amount: bet.amount,
+      status: bet.status,
+      message: "Pedido de aposta enviado. Aguardando resposta."
+    });
+
+  } catch (error) {
+    socket.emit("bet:error", {
+      message: error.message
+    });
+  }
+});
+
+socket.on("bet:respond", async payload => {
+  try {
+    const room = getSocketRoom(socket);
+
+    if (!room) {
+      throw new Error("Você não está em uma sala.");
+    }
+
+    const result = await respondToBet(
+      room,
+      socket.data.uid,
+      payload?.accepted
+    );
+
+    io.to(room.code).emit("bet:response", result);
+
+  } catch (error) {
+    socket.emit("bet:error", {
+      message: error.message
+    });
+  }
+});
   socket.on("joinRoom", payload => joinRoom(socket, payload));
-  socket.on("moveAttempt", payload => handleMoveAttempt(socket, payload));
+socket.on("moveAttempt", async payload => {
+  try {
+    await handleMoveAttempt(socket, payload);
+  } catch (error) {
+    console.error("[Jogada] Erro ao processar movimento:", error);
+    socket.emit("moveRejected", {
+      message: "Erro ao processar a jogada. Tente novamente."
+    });
+  }
+});
 
   socket.on("requestRoomState", () => {
     const room = getSocketRoom(socket);
