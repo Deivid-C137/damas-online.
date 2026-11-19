@@ -89,12 +89,17 @@ async function account(index, waitForBalance = true) {
   const context = await browser.newContext();
   await context.route("**/*", route => {
     const url = new URL(route.request().url());
+    // Keep one observable transport so dropping both endpoints cannot wait for a polling heartbeat.
+    if (url.origin === origin && url.pathname === "/socket.io/" &&
+        url.searchParams.get("transport") === "polling") return route.abort();
     if ([origin, `http://${emulator}`].includes(url.origin)) return route.continue();
     return route.abort();
   });
   const incoming = [];
   let transport;
+  let offline = false;
   await context.routeWebSocket(wsUrl => wsUrl.host === new URL(origin).host && wsUrl.pathname === "/socket.io/", route => {
+    if (offline) return route.close();
     const upstream = route.connectToServer();
     transport = { route, upstream };
     upstream.onMessage(message => {
@@ -103,15 +108,15 @@ async function account(index, waitForBalance = true) {
     });
   });
   const page = await context.newPage();
-  async function setOffline(offline) {
-    await context.setOffline(offline);
-    // Chromium can keep an established WebSocket open under offline emulation.
-    // Close the real transport explicitly to reproduce the network loss on both ends.
-    if (offline && transport) {
+  async function setOffline(disconnected) {
+    offline = disconnected;
+    if (offline) {
+      await eventually(() => assert.ok(transport));
       const { route, upstream } = transport;
       transport = null;
-      await Promise.allSettled([route.close(), upstream.close()]);
+      await Promise.allSettled([upstream.close(), route.close()]);
     }
+    await context.setOffline(offline);
   }
   const email = `damas-${Date.now()}-${index}@example.invalid`;
   await page.goto(origin);
