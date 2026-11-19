@@ -154,6 +154,18 @@ async function assertBet(code, status) {
   });
 }
 
+async function assertAbandonmentPayout(code, winnerUid) {
+  const bet = await assertBet(code, "finished");
+  assert.equal(bet.resolution, "payout");
+  assert.equal(bet.winner_uid, winnerUid);
+  const { rows } = await pool.query(
+    "SELECT type, amount FROM public.bet_transactions WHERE bet_id = $1 ORDER BY type, id", [bet.id]
+  );
+  assert.deepEqual(rows.map(row => [row.type, Number(row.amount)]), [
+    ["commission", 0.5], ["stake_reserved", 5], ["stake_reserved", 5], ["winner_payout", 9.5]
+  ]);
+}
+
 async function assertRefund(code) {
   const bet = await assertBet(code, "cancelled");
   const { rows } = await pool.query(
@@ -325,22 +337,45 @@ async function main() {
 
   await black.page.locator("#leave-room").click();
   await white.page.locator("#leave-room").waitFor({ state: "hidden" });
-  const abandoned = await createRoom(black.page, white.page);
+  const resigned = await createRoom(black.page, white.page);
   await propose(black.page, white.page);
   await accept(white.page);
+  const reserved = await assertBet(resigned, "reserved");
+  assert.equal(await white.page.locator("#leave-room").innerText(), "Desistir");
+  await white.page.locator("#leave-room").evaluate(button => {
+    button.click();
+    button.click();
+  });
+  await waitText(black.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
+  await waitText(white.page.locator("#status"), /Um jogador desistiu/);
+  await assertAbandonmentPayout(resigned, reserved.creator_uid);
   await black.page.locator("#leave-room").click();
-  await assertRefund(abandoned);
-  console.log("OK: saída voluntária estornou as duas reservas.");
+  await white.page.locator("#leave-room").waitFor({ state: "hidden" });
+  console.log("OK: desistência imediata pagou o adversário uma única vez.");
 
   const expired = await createRoom(black.page, white.page);
   await propose(black.page, white.page);
   await accept(white.page);
+  const expiryBet = await assertBet(expired, "reserved");
   await white.context.setOffline(true);
-  await assertRefund(expired);
+  await waitText(black.page.locator("#turn-title"), /AGUARDANDO RECONEXÃO/);
+  await waitText(black.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
+  await assertAbandonmentPayout(expired, expiryBet.creator_uid);
   await white.context.setOffline(false);
+  await waitText(white.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
+  await black.page.locator("#leave-room").click();
   await white.page.locator("#leave-room").waitFor({ state: "hidden" });
-  await waitText(white.page.locator("#status"), /Você não está em uma sala|A partida foi encerrada/);
-  console.log("OK: expiração da reconexão estornou as duas reservas.");
+  console.log("OK: prazo vencido pagou o jogador conectado e a volta tardia mostrou o resultado.");
+
+  const bothOffline = await createRoom(black.page, white.page);
+  await propose(black.page, white.page);
+  await accept(white.page);
+  await assertBet(bothOffline, "reserved");
+  await Promise.all([black.context.setOffline(true), white.context.setOffline(true)]);
+  await assertRefund(bothOffline);
+  await Promise.all([black.context.setOffline(false), white.context.setOffline(false)]);
+  await Promise.all([black, white].map(({ page }) => page.locator("#leave-room").waitFor({ state: "hidden" })));
+  console.log("OK: dois jogadores desconectados causaram estorno, sem vencedor.");
 
   const interrupted = await createRoom(black.page, white.page);
   await propose(black.page, white.page);

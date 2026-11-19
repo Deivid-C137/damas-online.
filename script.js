@@ -554,6 +554,7 @@ const betStatusElement = $("bet-status");
     legalMoves = selectedPiece ? legalMovesFor(selectedPiece.row, selectedPiece.col) : [];
 
     $("leave-room").hidden = false;
+    $("leave-room").textContent = onlineGameActive ? "Desistir" : "Sair da sala";
     hideDisconnectOverlay();
     renderBoard();
     updatePlayerCards();
@@ -799,7 +800,9 @@ function registerSocketEvents() {
 function registerRoomControls() {
   if (roomControlsRegistered) return;
   roomControlsRegistered = true;
-  $("leave-room").addEventListener("click", () => socket?.emit("leaveRoom"));
+  $("leave-room").addEventListener("click", () => {
+    if (socket?.connected) socket.emit(onlineGameActive ? "resignGame" : "leaveRoom");
+  });
   $("reconnect-button").addEventListener("click", () => {
     if (socket?.connected) socket.emit("requestRoomState");
     else socket?.connect();
