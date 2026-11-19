@@ -56,6 +56,12 @@ const betStatusElement = $("bet-status");
   let disconnectTimer = null;
   let opponentConnected = false;
   let submittedNickname = null;
+  let walletGeneration = 0;
+  let walletRetry = null;
+  let walletBalance = null;
+  let bettingAvailable = false;
+  let reconnectGraceMs = 120000;
+  let disconnectDeadline = null;
 
   let onlineRoomCode = null;
   let onlinePlayerColor = null;
@@ -296,33 +302,51 @@ const betStatusElement = $("bet-status");
   }
   // ------------------ CARTEIRA VIRTUAL ------------------
 
-  function updateWallet(balance) {
-    if (!walletBalanceElement) return;
+  const balanceFormat = new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 
-    walletBalanceElement.textContent = Number(balance).toLocaleString(
-      "pt-BR",
-      {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      }
-    );
+  function cancelWalletRequest() {
+    walletGeneration++;
+    clearTimeout(walletRetry);
+    walletRetry = null;
   }
 
-  function requestWallet() {
+  function renderWallet(message) {
+    walletBalanceElement.textContent = walletBalance === null ? "—" : balanceFormat.format(walletBalance);
+    walletMessageElement.textContent = message;
+  }
+
+  function requestWallet(attempt = 0) {
+    cancelWalletRequest();
     if (!socket?.connected) {
-      if (walletMessageElement) {
-        walletMessageElement.textContent =
-          "Aguardando conexão com o servidor.";
-      }
+      renderWallet(walletBalance === null
+        ? "Aguardando conexão para consultar seu saldo."
+        : "Último saldo conhecido. Aguardando conexão.");
       return;
     }
 
-    if (walletMessageElement) {
-      walletMessageElement.textContent = "Carregando saldo...";
-    }
+    const generation = walletGeneration;
+    renderWallet(walletBalance === null ? "Carregando saldo..." : "Atualizando saldo...");
+    socket.timeout(9000).emit("wallet:request", (error, payload) => {
+      if (generation !== walletGeneration) return;
+      if (!error && payload?.success && typeof payload.balance === "number" &&
+          Number.isFinite(payload.balance) && payload.balance >= 0) {
+        walletBalance = payload.balance;
+        renderWallet("Saldo atualizado.");
+        return;
+      }
 
-    socket.emit("wallet:request");
+      const retry = socket?.connected && attempt < 3 && (error || payload?.retryable);
+      const message = walletBalance === null
+        ? "Saldo temporariamente indisponível."
+        : "Último saldo conhecido. Atualização indisponível.";
+      renderWallet(message + (retry ? " Tentando novamente..." : " Use Atualizar saldo para tentar de novo."));
+      if (retry) walletRetry = setTimeout(() => requestWallet(attempt + 1), 2000 * (attempt + 1));
+    });
   }
+
   function updateLiveStatus(active) {
     if (!liveStatusElement || !liveStatusText) return;
 
@@ -435,14 +459,18 @@ const betStatusElement = $("bet-status");
   function renderBet() {
     const pending = onlineBet?.status === "pending";
     const canRespond = pending && onlineBet.responderColor === onlinePlayerColor;
-    const ready = Boolean(socket?.connected && onlineGameActive && opponentConnected && !gameOver);
-    betCreateButton.disabled = !ready || Boolean(onlineBet);
+    const ready = Boolean(bettingAvailable && socket?.connected && onlineGameActive && opponentConnected && !gameOver);
+    betCreateButton.disabled = !ready || Boolean(onlineBet && onlineBet.status !== "cancelled");
     betResponseArea.hidden = !canRespond || !ready;
     betAcceptButton.disabled = !canRespond || !ready;
     betDeclineButton.disabled = !canRespond || !ready;
     if (canRespond) {
       const amount = Number(onlineBet.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
       betRequestMessage.textContent = `Seu adversário propôs uma aposta de ${amount} créditos. Deseja aceitar?`;
+    }
+    if (!bettingAvailable && onlineGameActive) {
+      betStatusElement.textContent = "Apostas temporariamente indisponíveis.";
+      return;
     }
     betStatusElement.textContent = ({
       pending: canRespond ? "Você recebeu um pedido de aposta." : "Aguardando resposta do adversário.",
@@ -455,18 +483,19 @@ const betStatusElement = $("bet-status");
   function hideDisconnectOverlay() {
     clearInterval(disconnectTimer);
     disconnectTimer = null;
+    disconnectDeadline = null;
     $("disconnect-overlay").hidden = true;
   }
 
   function showDisconnectOverlay() {
-    hideDisconnectOverlay();
+    clearInterval(disconnectTimer);
     const overlay = $("disconnect-overlay");
     overlay.hidden = false;
     // Local estimate until the server confirms the state of the room.
-    const deadline = Date.now() + 120000;
+    disconnectDeadline ??= Date.now() + reconnectGraceMs;
     const countdown = $("disconnect-countdown");
     function tick() {
-      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      const remaining = Math.max(0, Math.ceil((disconnectDeadline - Date.now()) / 1000));
       countdown.textContent = `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
       if (!remaining) clearInterval(disconnectTimer);
     }
@@ -517,6 +546,7 @@ const betStatusElement = $("bet-status");
     onlineGameActive = Boolean(payload.started) && !gameOver;
     opponentConnected = Boolean(payload.players?.[onlinePlayerColor === WHITE ? BLACK : WHITE]);
     onlineBet = payload.bet || null;
+    if (Number.isFinite(payload.reconnectGraceMs)) reconnectGraceMs = payload.reconnectGraceMs;
     nicknames = payload.nicknames || { black: null, white: null };
     selectedPiece = mustContinue && turn === onlinePlayerColor
       ? { row: mustContinue.r, col: mustContinue.c }
@@ -553,8 +583,10 @@ const betStatusElement = $("bet-status");
     $("profile-nickname").value = "";
     $("profile-message").textContent = "";
     $("profile-save").disabled = true;
-    walletBalanceElement.textContent = "—";
-    walletMessageElement.textContent = "Entre para consultar seu saldo.";
+    cancelWalletRequest();
+    walletBalance = null;
+    bettingAvailable = false;
+    renderWallet("Entre para consultar seu saldo.");
     renderBet();
   }
 
@@ -590,8 +622,7 @@ function registerSocketEvents() {
     // Solicita o saldo da carteira
     requestWallet();
 
-    socket.emit("requestRoomState");
-    // Verifica se precisa recuperar uma sala online
+    // O servidor informa se a conta ainda possui uma sala.
     if (onlineRoomCode) {
       onlineGameActive = false;
       movePending = false;
@@ -610,35 +641,11 @@ function registerSocketEvents() {
   // RESPOSTA DA CARTEIRA VIRTUAL
   // =============================================
 
-  socket.on("wallet:response", (payload) => {
-
-    if (!payload || payload.success !== true) {
-      if (walletMessageElement) {
-        walletMessageElement.textContent =
-          payload?.message || "Não foi possível carregar sua carteira.";
-      }
-      return;
-    }
-
-    const balance = Number(payload.balance);
-
-    if (!Number.isFinite(balance) || balance < 0) {
-      if (walletMessageElement) {
-        walletMessageElement.textContent =
-          "O servidor retornou um saldo inválido.";
-      }
-      return;
-    }
-
-    updateWallet(balance);
-
-    if (walletMessageElement) {
-      walletMessageElement.textContent =
-        "Carteira sincronizada com sucesso.";
-    }
+  socket.on("wallet:changed", () => requestWallet());
+  socket.on("bet:availability", ({ ready }) => {
+    bettingAvailable = ready === true;
+    renderBet();
   });
- 
-
 
   socket.on("profile:state", ({ nickname }) => {
     const input = $("profile-nickname");
@@ -663,7 +670,9 @@ function registerSocketEvents() {
   });
 
   socket.on("roomResumed", restoreOnlineRoom);
-  socket.on("playerReconnected", () => socket.emit("requestRoomState"));
+  socket.on("playerReconnected", payload => {
+    if (payload.code === onlineRoomCode) restoreOnlineRoom(payload);
+  });
   socket.on("roomStateUnavailable", payload => {
     if (onlineRoomCode) clearOnlineRoom(messageOf(payload, "A partida foi encerrada."));
   });
@@ -684,6 +693,8 @@ function registerSocketEvents() {
   });
 
   socket.on("disconnect", () => {
+    bettingAvailable = false;
+    requestWallet();
     onlineGameActive = false;
     movePending = false;
     $("profile-save").disabled = true;
@@ -757,20 +768,22 @@ function registerSocketEvents() {
     socket.on("boardUpdate", restoreOnlineRoom);
 
     socket.on("bet:created", data => {
+      if (data.code !== onlineRoomCode) return;
       onlineBet = { ...data, responderColor: onlinePlayerColor };
       renderBet();
     });
 
     socket.on("bet:sent", data => {
+      if (data.code !== onlineRoomCode) return;
       onlineBet = data;
       renderBet();
     });
 
     socket.on("bet:response", data => {
-      if (onlineBet) onlineBet.status = data.status;
+      if (!onlineBet || onlineBet.id !== data.id || data.code !== onlineRoomCode) return;
+      onlineBet.status = data.status;
       renderBet();
       betStatusElement.textContent = data.message;
-      if (data.accepted) requestWallet();
     });
 
     socket.on("bet:error", data => {
@@ -877,7 +890,7 @@ function registerBetControls() {
     betAcceptButton.disabled = true;
     betDeclineButton.disabled = true;
 
-    socket.emit("bet:respond", { accepted: true });
+    socket.emit("bet:respond", { accepted: true, betId: onlineBet?.id });
   });
 
   betDeclineButton.addEventListener("click", () => {
@@ -887,7 +900,7 @@ function registerBetControls() {
     betAcceptButton.disabled = true;
     betDeclineButton.disabled = true;
 
-    socket.emit("bet:respond", { accepted: false });
+    socket.emit("bet:respond", { accepted: false, betId: onlineBet?.id });
   });
 }
 
@@ -960,7 +973,7 @@ function registerBetControls() {
   });
 
   if (refreshWalletButton) {
-  refreshWalletButton.addEventListener("click", requestWallet);
+    refreshWalletButton.addEventListener("click", () => requestWallet());
 }
 
   // ------------------ LOGIN FIREBASE ------------------
