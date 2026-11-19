@@ -14,7 +14,10 @@ A migração inicial é reaplicável. Em banco existente, revise o esquema antes
 
 - As brancas começam. O mesmo motor valida os modos local e online. É obrigatório seguir um trajeto que capture o maior número de peças, inclusive durante a sequência. Trajetos empatados são permitidos. Peças simples capturam para frente e para trás, damas percorrem a diagonal, peças capturadas bloqueiam a diagonal até o final da sequência e a promoção ocorre no fim da jogada.
 - A partida tem vitória por falta de peças ou de jogadas e empate automático na terceira ocorrência da mesma posição com o mesmo lado a jogar.
-- A sala fica pausada enquanto um jogador está desconectado e expira após 120 segundos. Em empate, saída ou expiração, reservas são estornadas. Após reinício, o servidor paga um resultado de vitória que chegou a ser registrado no banco e estorna reservas quando o resultado se perdeu com a sala. A liquidação é transacional e tem novas tentativas após falhas temporárias.
+- A partida pausa quando um jogador cai. Ele tem 2 minutos para reconectar. Se, no vencimento do prazo, apenas o adversário estiver conectado, o adversário vence por abandono e recebe o prêmio normal da aposta aceita.
+- O jogador conectado vê um alerta com o prazo informado pelo servidor. Quem perde a conexão vê um aviso discreto com **Tentar reconectar**. O cliente também tenta voltar automaticamente. Com a mesma conta, a sessão recupera a sala mesmo depois de recarregar. Após abandono, o servidor em execução mantém o resultado recente por até 10 minutos para o jogador que estava ausente.
+- O botão **Desistir** encerra imediatamente uma partida ativa com derrota de quem desistiu. O adversário recebe o prêmio normal da aposta aceita. É possível sair normalmente do lobby ou de uma partida concluída.
+- As reservas são estornadas em empate, quando os dois jogadores estão desconectados ao expirar o prazo ou quando o servidor interrompe a partida sem um resultado persistido. Se o resultado foi persistido, a liquidação é retomada após reinício. A liquidação é transacional e idempotente.
 - O e-mail aparece no painel privado da conta autenticada. O servidor das partidas recebe o token para verificação e usa o UID para identificar a conta. O estado da sala carrega apenas os apelidos públicos para exibição, com um rótulo por cor quando o jogador deixa o apelido em branco.
 - Apelidos aceitam de 3 a 24 caracteres com letras latinas, números e separadores internos. O servidor normaliza espaços e variantes Unicode e usa uma lista de termos proibidos, incluindo formas comuns de xingamentos e referências a conteúdo adulto. A checagem usa palavras ou grupos separados, evitando bloquear um nome por qualquer trecho isolado.
 
@@ -50,10 +53,10 @@ npx esbuild entrada.mjs --bundle --format=esm --outfile=local-firebase-sdk.js
 
 ## Testes
 
-`npm test` executa as regressões de regras e apelidos. Para o teste de ponta a ponta, disponibilize Playwright no ambiente de teste, instale o Chromium do Playwright ou configure `DAMAS_BROWSER_PATH` com o caminho de um navegador Chromium instalado. Use o SDK local descrito acima e aplique a migração. **Use um banco exclusivamente de teste e pare o servidor manual do jogo antes da execução.** O roteiro levanta e reinicia sua própria instância na porta 3301, testa perda temporária de acesso à tabela de lançamentos e cria dados sintéticos.
+`npm test` executa as regressões de regras e apelidos. Para o teste de ponta a ponta, disponibilize Playwright no ambiente de teste, instale o Chromium do Playwright ou configure `DAMAS_BROWSER_PATH` com o caminho de um navegador Chromium instalado. Use o SDK local descrito acima e aplique a migração. **Use um banco exclusivamente de teste e pare o servidor manual do jogo antes da execução.** O roteiro levanta e reinicia sua própria instância a partir da porta 3301 e usa as duas portas seguintes para os reinícios. Ele testa perda temporária de acesso à tabela de lançamentos e cria dados sintéticos.
 
 ```sh
 node --env-file=.env.local test/e2e.js
 ```
 
-O roteiro abre sessões de navegador independentes e cobre modo local, cadastro e login, privacidade e moderação de apelidos, carteira, recuperação de convite de aposta, reconexão, partida completa, nova tentativa de pagamento e estornos por saída, expiração e reinício.
+O roteiro abre sessões de navegador independentes e cobre modo local, cadastro e login, privacidade e moderação de apelidos, carteira, recuperação de convite de aposta, reconexão, partida completa, nova tentativa de pagamento e vitórias por desistência e por prazo de reconexão vencido, estorno quando ambos se desconectam e recuperação após reinício.

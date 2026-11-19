@@ -18,7 +18,7 @@ if (!/^127\.0\.0\.1:\d+$/.test(emulator || "") ||
     !/^demo-/.test(process.env.GCLOUD_PROJECT || "") ||
     !database || new URL(database).hostname !== "127.0.0.1" ||
     !process.env.DAMAS_LOCAL_FIREBASE_SDK ||
-    !Number.isInteger(port) || port < 1024 || port > 65535) {
+    !Number.isInteger(port) || port < 1024 || port > 65533) {
   throw new Error("O E2E exige projeto demo-, emulador, banco e SDK locais e uma porta livre.");
 }
 
@@ -40,9 +40,9 @@ async function eventually(check, timeout = 12000) {
   throw error;
 }
 
-function readHealth() {
+function readHealth(serverPort) {
   return new Promise((resolve, reject) => {
-    const request = http.get(`${origin}/health`, { agent: false, timeout: 1000 }, response => {
+    const request = http.get(`http://127.0.0.1:${serverPort}/health`, { agent: false, timeout: 1000 }, response => {
       const chunks = [];
       response.on("data", chunk => chunks.push(chunk));
       response.on("error", reject);
@@ -60,18 +60,18 @@ function readHealth() {
   });
 }
 
-async function startServer() {
+async function startServer(serverPort = port) {
   server = spawn(process.execPath, ["server.js"], {
     stdio: ["ignore", "inherit", "inherit"],
-    env: { ...process.env, PORT: String(port), DAMAS_TEST_RECONNECT_MS: "7000" },
+    env: { ...process.env, PORT: String(serverPort), DAMAS_TEST_RECONNECT_MS: "7000" },
     windowsHide: true
   });
   await eventually(async () => {
     assert.equal(server.exitCode, null);
-    const health = await readHealth();
+    const health = await readHealth(serverPort);
     assert.equal(health.firebaseReady, true);
     assert.equal(health.bettingReady, true);
-  }, 30000);
+  }, 90000);
 }
 
 async function stopServer() {
@@ -92,9 +92,27 @@ async function account(index, waitForBalance = true) {
     if ([origin, `http://${emulator}`].includes(url.origin)) return route.continue();
     return route.abort();
   });
-  const page = await context.newPage();
   const incoming = [];
-  page.on("websocket", socket => socket.on("framereceived", ({ payload }) => incoming.push(String(payload))));
+  let transport;
+  await context.routeWebSocket(wsUrl => wsUrl.host === new URL(origin).host && wsUrl.pathname === "/socket.io/", route => {
+    const upstream = route.connectToServer();
+    transport = { route, upstream };
+    upstream.onMessage(message => {
+      incoming.push(String(message));
+      route.send(message);
+    });
+  });
+  const page = await context.newPage();
+  async function setOffline(offline) {
+    await context.setOffline(offline);
+    // Chromium can keep an established WebSocket open under offline emulation.
+    // Close the real transport explicitly to reproduce the network loss on both ends.
+    if (offline && transport) {
+      const { route, upstream } = transport;
+      transport = null;
+      await Promise.allSettled([route.close(), upstream.close()]);
+    }
+  }
   const email = `damas-${Date.now()}-${index}@example.invalid`;
   await page.goto(origin);
   await page.locator("#auth-tab-register").click();
@@ -102,7 +120,7 @@ async function account(index, waitForBalance = true) {
   await page.locator("#auth-password").fill("Senha-local-730");
   await page.locator("#auth-submit").click();
   if (waitForBalance) await waitText(page.locator("#wallet-balance"), /500/);
-  return { page, context, email, incoming };
+  return { page, setOffline, email, incoming };
 }
 
 async function loginAgain({ page, email }) {
@@ -152,6 +170,18 @@ async function assertBet(code, status) {
     assert.equal(bet?.status, status);
     return bet;
   });
+}
+
+async function assertAbandonmentPayout(code, winnerUid) {
+  const bet = await assertBet(code, "finished");
+  assert.equal(bet.resolution, "payout");
+  assert.equal(bet.winner_uid, winnerUid);
+  const { rows } = await pool.query(
+    "SELECT type, amount FROM public.bet_transactions WHERE bet_id = $1 ORDER BY type, id", [bet.id]
+  );
+  assert.deepEqual(rows.map(row => [row.type, Number(row.amount)]), [
+    ["commission", 0.5], ["stake_reserved", 5], ["stake_reserved", 5], ["winner_payout", 9.5]
+  ]);
 }
 
 async function assertRefund(code) {
@@ -264,6 +294,13 @@ async function main() {
   await setNickname(black.page, "  Águia   Azul  ", /Apelido salvo/);
   await setNickname(white.page, "Luz d’Ávila", /Apelido salvo/);
 
+  await black.page.locator("#create-room").click();
+  const lobbyExit = black.page.locator("#leave-room");
+  await lobbyExit.waitFor({ state: "visible" });
+  assert.equal(await lobbyExit.innerText(), "Sair da sala");
+  await lobbyExit.click();
+  await lobbyExit.waitFor({ state: "hidden" });
+
   const code = await createRoom(black.page, white.page);
   await waitText(black.page.locator("#white-player"), /Luz d’Ávila/);
   await waitText(white.page.locator("#black-player"), /Águia Azul/);
@@ -288,12 +325,41 @@ async function main() {
   await waitText(white.page.locator("#wallet-balance"), /495/);
   assert.equal((await assertBet(code, "reserved")).resolution, null);
 
-  await white.context.setOffline(true);
+  await white.setOffline(true);
   await waitText(black.page.locator("#turn-title"), /AGUARDANDO RECONEXÃO/);
-  await white.page.locator("#disconnect-overlay").waitFor({ state: "visible" });
-  await white.context.setOffline(false);
-  await white.page.locator("#reconnect-button").click();
+  const boardBefore = await white.page.locator("#board .cell").evaluateAll(cells => cells.map(cell => cell.getAttribute("aria-label")));
+  const overlay = black.page.getByRole("dialog", { name: "Adversário desconectado" });
+  const offlineOverlay = white.page.locator("#disconnect-overlay");
+  await overlay.waitFor({ state: "visible" });
+  const offlineNotice = white.page.locator("#offline-notice");
+  await offlineNotice.waitFor({ state: "visible" });
+  await white.page.getByRole("button", { name: "Tentar reconectar" }).click();
+  await waitText(white.page.locator("#offline-status"), /Sem conexão/);
+  await offlineOverlay.waitFor({ state: "hidden" });
+  assert.equal(await black.page.locator("#reconnect-button").count(), 0);
+  assert.equal(await black.page.locator("#disconnect-title").evaluate(el => el === document.activeElement), true);
+  const firstTick = await black.page.locator("#disconnect-countdown").innerText();
+  assert.match(firstTick.trim(), /^00:0[1-7]$/);
+  await eventually(async () => assert.notEqual(await black.page.locator("#disconnect-countdown").innerText(), firstTick));
+  if (process.env.DAMAS_ALERT_SCREENSHOT) {
+    await black.page.screenshot({ path: process.env.DAMAS_ALERT_SCREENSHOT });
+    await black.page.setViewportSize({ width: 390, height: 760 });
+    await black.page.emulateMedia({ reducedMotion: "reduce" });
+    assert.equal(await overlay.evaluate(el => getComputedStyle(el).animationName), "none");
+    await black.page.screenshot({ path: process.env.DAMAS_ALERT_SCREENSHOT.replace(/\.png$/, "-mobile.png") });
+    await black.page.setViewportSize({ width: 1280, height: 720 });
+    if (process.env.DAMAS_OFFLINE_SCREENSHOT) await white.page.screenshot({ path: process.env.DAMAS_OFFLINE_SCREENSHOT });
+  }
+  await black.page.reload();
+  await overlay.waitFor({ state: "visible" });
+  await offlineOverlay.waitFor({ state: "hidden" });
+  await white.setOffline(false);
   await waitText(white.page.locator("#room-info"), /Partida em andamento/);
+  await offlineNotice.waitFor({ state: "hidden" });
+  await overlay.waitFor({ state: "hidden" });
+  assert.equal(await white.page.locator("#room-code").inputValue(), code);
+  await waitText(white.page.locator("#turn-title"), /É SUA VEZ/);
+  assert.deepEqual(await white.page.locator("#board .cell").evaluateAll(cells => cells.map(cell => cell.getAttribute("aria-label"))), boardBefore);
   await waitText(white.page.locator("#bet-status"), /reservados/i);
   await waitText(black.page.locator("#white-player"), /Dama da Serra/);
 
@@ -325,32 +391,61 @@ async function main() {
 
   await black.page.locator("#leave-room").click();
   await white.page.locator("#leave-room").waitFor({ state: "hidden" });
-  const abandoned = await createRoom(black.page, white.page);
+  const resigned = await createRoom(black.page, white.page);
   await propose(black.page, white.page);
   await accept(white.page);
+  const reserved = await assertBet(resigned, "reserved");
+  assert.equal(await white.page.locator("#leave-room").innerText(), "Desistir");
+  await white.page.locator("#leave-room").evaluate(button => {
+    button.click();
+    button.click();
+  });
+  await waitText(black.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
+  await waitText(white.page.locator("#status"), /Um jogador desistiu/);
+  await assertAbandonmentPayout(resigned, reserved.creator_uid);
   await black.page.locator("#leave-room").click();
-  await assertRefund(abandoned);
-  console.log("OK: saída voluntária estornou as duas reservas.");
+  await white.page.locator("#leave-room").waitFor({ state: "hidden" });
+  console.log("OK: desistência imediata pagou o adversário uma única vez.");
 
   const expired = await createRoom(black.page, white.page);
   await propose(black.page, white.page);
   await accept(white.page);
-  await white.context.setOffline(true);
-  await assertRefund(expired);
-  await white.context.setOffline(false);
+  const expiryBet = await assertBet(expired, "reserved");
+  await white.setOffline(true);
+  await waitText(black.page.locator("#turn-title"), /AGUARDANDO RECONEXÃO/);
+  await overlay.waitFor({ state: "visible" });
+  await offlineOverlay.waitFor({ state: "hidden" });
+  await waitText(black.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
+  await overlay.waitFor({ state: "hidden" });
+  await assertAbandonmentPayout(expired, expiryBet.creator_uid);
+  await black.page.locator("#leave-room").click();
+  await white.setOffline(false);
+  await waitText(white.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
+  await offlineNotice.waitFor({ state: "hidden" });
+  await assertAbandonmentPayout(expired, expiryBet.creator_uid);
+  await white.page.locator("#leave-room").click();
   await white.page.locator("#leave-room").waitFor({ state: "hidden" });
-  await waitText(white.page.locator("#status"), /Você não está em uma sala|A partida foi encerrada/);
-  console.log("OK: expiração da reconexão estornou as duas reservas.");
+  console.log("OK: prazo vencido pagou o jogador conectado e a volta tardia mostrou o resultado.");
+
+  const bothOffline = await createRoom(black.page, white.page);
+  await propose(black.page, white.page);
+  await accept(white.page);
+  await assertBet(bothOffline, "reserved");
+  await Promise.all([black.setOffline(true), white.setOffline(true)]);
+  await assertRefund(bothOffline);
+  await Promise.all([black.setOffline(false), white.setOffline(false)]);
+  await Promise.all([black, white].map(({ page }) => page.locator("#leave-room").waitFor({ state: "hidden" })));
+  console.log("OK: dois jogadores desconectados causaram estorno, sem vencedor.");
 
   const interrupted = await createRoom(black.page, white.page);
   await propose(black.page, white.page);
   await accept(white.page);
   await assertBet(interrupted, "reserved");
   await stopServer();
-  await startServer();
+  await startServer(port + 1);
   await assertRefund(interrupted);
   await stopServer();
-  await startServer();
+  await startServer(port + 2);
   await assertRefund(interrupted);
   console.log("OK: reinício abrupto estornou reservas órfãs e segunda recuperação não duplicou o estorno.");
 }

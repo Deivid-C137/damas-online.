@@ -217,6 +217,7 @@
           <button id="leave-room" class="btn btn-secondary" type="button" hidden>
             Sair da sala
           </button>
+          <p class="wallet-notice">Desistir durante a partida conta como derrota. Se houver aposta aceita, o vencedor recebe o prêmio normalmente.</p>
         </section>
         <!-- SISTEMA DE APOSTAS -->
         <section id="bet-panel" class="panel bet-panel">
@@ -351,46 +352,42 @@
       </section>
 
     </section>
-<!-- TELA DE DESCONEXÃO -->
-<div id="disconnect-overlay" class="disconnect-overlay" hidden>
+<div id="offline-notice" class="offline-notice" hidden>
+  <span id="offline-status" role="status">Conexão perdida. Tentando reconectar…</span>
+  <button id="retry-connection" type="button" class="btn btn-secondary">Tentar reconectar</button>
+</div>
+<!-- ALERTA DO ADVERSÁRIO -->
+<dialog id="disconnect-overlay" class="disconnect-overlay" aria-labelledby="disconnect-title" aria-describedby="disconnect-description disconnect-warning">
   <div class="disconnect-modal">
 
-    <div class="disconnect-icon">⌁</div>
+    <div class="disconnect-icon" aria-hidden="true"><span></span></div>
 
-    <h2>DESCONECTADO</h2>
+    <h2 id="disconnect-title" tabindex="-1" autofocus>Adversário desconectado</h2>
 
-    <p class="disconnect-description">
-      Você perdeu a conexão com a partida.
+    <p id="disconnect-description" class="disconnect-description">
+      Seu adversário perdeu a conexão com a partida.
     </p>
 
-    <p class="disconnect-status">
-      Tentando reconectar...
+    <p id="disconnect-status" class="disconnect-status" role="status">
+      Aguardando o adversário voltar.
     </p>
 
     <div class="disconnect-divider"></div>
 
     <span class="disconnect-label">
-      TEMPO ESTIMADO PARA RECONEXÃO
+      TEMPO PARA O ADVERSÁRIO VOLTAR
     </span>
 
-    <div id="disconnect-countdown" class="disconnect-countdown">
+    <div id="disconnect-countdown" class="disconnect-countdown" role="timer" aria-label="Prazo do adversário para reconectar">
       02:00
     </div>
 
-    <p class="disconnect-warning">
-      Se o prazo terminar, a sala será encerrada e os créditos reservados serão estornados.
+    <p id="disconnect-warning" class="disconnect-warning">
+      Aguarde. Se o prazo terminar sem que seu adversário volte e você continuar conectado, você vence por abandono.
     </p>
 
-    <button
-      id="reconnect-button"
-      class="btn-reconnect"
-      type="button"
-    >
-      TENTAR RECONEXÃO AGORA
-    </button>
-
   </div>
-</div>
+</dialog>
     <!-- RODAPÉ -->
     <footer class="footer">
       <span>

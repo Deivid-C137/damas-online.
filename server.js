@@ -128,6 +128,8 @@ const rooms = new Map();
 const socketRooms = new Map();
 const userSockets = new Map();
 const reconnectTimers = new Map();
+const recentAbandonments = new Map();
+const ABANDONMENT_RESULT_MS = 10 * 60 * 1000;
 
 const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -283,6 +285,7 @@ function roomSnapshot(room) {
     capturedThisTurn: room.capturedThisTurn.map(pos => ({ ...pos })),
     gameOver: room.gameOver,
     winner: room.winner,
+    ...(room.resultMessage && { message: room.resultMessage }),
     started: room.started,
     bet: room.bet ? {
       id: room.bet.id,
@@ -291,6 +294,8 @@ function roomSnapshot(room) {
       responderColor: room.playerUids.black === room.bet.opponentUid ? BLACK : WHITE
     } : null,
     reconnectGraceMs: RECONNECT_GRACE_MS,
+    reconnectDeadlines: { ...room.reconnectDeadlines },
+    serverTime: Date.now(),
     nicknames: { ...room.nicknames },
     players: {
       black: Boolean(room.players.black),
@@ -316,11 +321,10 @@ function createRoomState(code, socketId, uid) {
     },
 
     gameOver: false,
-winner: null,
-started: false,
-
-// SISTEMA DE APOSTAS
-bet: null,
+    winner: null,
+    resultMessage: null,
+    started: false,
+    bet: null,
 
     operations: Promise.resolve(),
     closing: false,
@@ -350,12 +354,30 @@ function scheduleReconnectExpiry(room, color) {
   room.reconnectDeadlines[color] ??= Date.now() + RECONNECT_GRACE_MS;
   const timer = setTimeout(() => {
     reconnectTimers.delete(key);
-    if (room.players[color] === null) {
-      closeRoom(room, "O prazo para reconexão terminou. A partida foi encerrada.");
+    if (room.reconnectDeadlines[color] > Date.now()) {
+      scheduleReconnectExpiry(room, color);
+      return;
     }
+    expireReconnects(room);
   }, room.reconnectDeadlines[color] - Date.now());
   timer.unref();
   reconnectTimers.set(key, timer);
+}
+
+function expireReconnects(room, now = Date.now()) {
+  if (room.closing) return;
+  const colors = [BLACK, WHITE];
+  const expired = colors.some(color => !room.players[color] &&
+    room.reconnectDeadlines[color] !== null && room.reconnectDeadlines[color] <= now);
+  if (!expired) return;
+
+  const connected = colors.filter(color => room.players[color]);
+  if (room.started && !room.gameOver && connected.length === 1) {
+    endByAbandonment(room, connected[0], "O adversário não voltou a tempo.");
+    return;
+  }
+
+  closeRoom(room, "O prazo para reconexão terminou. A sala foi encerrada.");
 }
 
 function enqueueRoom(room, operation) {
@@ -745,14 +767,45 @@ function startRecovery() {
   recoveryAttempt = recoverBets().finally(() => { recoveryAttempt = null; });
 }
 
-async function finishGame(room, winner, message) {
+function announceGameResult(room, winner, message) {
+  if (room.closing || room.gameOver) return false;
   room.gameOver = true;
   room.winner = winner;
+  room.resultMessage = message;
+  room.mustContinue = null;
+  for (const { r, c } of room.capturedThisTurn) room.board[r][c] = null;
+  room.capturedThisTurn = [];
+  for (const color of [BLACK, WHITE]) {
+    clearReconnectTimer(room.code, color);
+    room.reconnectDeadlines[color] = null;
+  }
 
-  const result = { ...roomSnapshot(room), message };
+  const result = roomSnapshot(room);
   io.to(room.code).emit("boardUpdate", result);
   io.to(room.code).emit("gameOver", result);
-  await resolveBet(room, winner);
+  return true;
+}
+
+async function finishGame(room, winner, message) {
+  if (announceGameResult(room, winner, message)) await resolveBet(room, winner);
+}
+
+function endByAbandonment(room, winner, reason) {
+  const side = winner === WHITE ? "As brancas" : "As pretas";
+  if (!announceGameResult(room, winner, `${side} venceram por abandono. ${reason}`)) return;
+
+  for (const color of [BLACK, WHITE]) {
+    const uid = room.playerUids[color];
+    if (uid && !room.players[color]) {
+      recentAbandonments.delete(uid);
+      recentAbandonments.set(uid, { room, color, until: Date.now() + ABANDONMENT_RESULT_MS });
+    }
+  }
+  while (recentAbandonments.size > 500) recentAbandonments.delete(recentAbandonments.keys().next().value);
+
+  // Lock in the result immediately, then settle after any bet transaction already in flight.
+  void enqueueRoom(room, () => resolveBet(room, winner))
+    .catch(error => console.error("[Sala] Abandono:", error.message));
 }
 
 function parseCoordinate(value) {
@@ -845,12 +898,28 @@ async function handleMoveAttempt(socket, payload) {
 
 function leaveCurrentRoom(socket) {
   const room = getSocketRoom(socket);
+  if (room?.started && !room.gameOver) {
+    emitRoomError(socket, "Use Desistir para encerrar uma partida em andamento.");
+    return;
+  }
   if (room) {
     socket.leave(room.code);
     socketRooms.delete(socket.id);
     closeRoom(room, "O adversário saiu. A partida foi encerrada.");
   }
+  recentAbandonments.delete(socket.data.uid);
   socket.emit("roomLeft", { message: "Você saiu da sala." });
+}
+
+function resignGame(socket) {
+  const room = getSocketRoom(socket);
+  if (!room?.started || room.gameOver) return;
+  const color = getPlayerColor(room, socket.id);
+  if (!color) return;
+
+  expireReconnects(room);
+  if (room.gameOver || room.closing) return;
+  endByAbandonment(room, color === WHITE ? BLACK : WHITE, "Um jogador desistiu.");
 }
 
 function createRoom(socket) {
@@ -974,11 +1043,8 @@ function resumeRoomForSocket(socket) {
     }
 
     if (!color) continue;
-    const deadline = room.reconnectDeadlines[color];
-    if (deadline && Date.now() >= deadline) {
-      closeRoom(room, "O prazo para reconexão terminou. A partida foi encerrada.");
-      continue;
-    }
+    expireReconnects(room);
+    if (room.closing) continue;
 
     const previousSocketId = room.players[color];
 
@@ -1003,12 +1069,12 @@ function resumeRoomForSocket(socket) {
     socket.emit("roomResumed", {
       ...roomSnapshot(room),
       color,
-      message: "Partida recuperada com sucesso."
+      message: room.resultMessage || "Partida recuperada com sucesso."
     });
 
     socket.to(room.code).emit("playerReconnected", {
       ...roomSnapshot(room),
-      message: "O adversário voltou à partida."
+      message: room.resultMessage || "O adversário voltou à partida."
     });
 
     console.log(
@@ -1257,13 +1323,21 @@ socket.on("moveAttempt", async payload => {
     );
   });
 
+  socket.on("resignGame", () => resignGame(socket));
+
   socket.on("leaveRoom", () => {
     leaveCurrentRoom(socket);
   });
 
   // Recupera a partida após registrar os listeners do servidor.
   if (!resumeRoomForSocket(socket)) {
-    socket.emit("roomStateUnavailable", { message: "Você não está em uma sala." });
+    const result = recentAbandonments.get(uid);
+    if (result && result.until > Date.now()) {
+      socket.emit("roomResumed", { ...roomSnapshot(result.room), color: result.color });
+    } else {
+      recentAbandonments.delete(uid);
+      socket.emit("roomStateUnavailable", { message: "Você não está em uma sala." });
+    }
   }
 
   socket.on("disconnect", reason => {
@@ -1277,11 +1351,14 @@ socket.on("moveAttempt", async payload => {
 
       // Só altera a vaga se ela ainda pertencer a este socket.
       if (color && room.players[color] === socket.id) {
-        room.players[color] = null;
+        expireReconnects(room);
+        if (!room.closing) room.players[color] = null;
 
-        scheduleReconnectExpiry(room, color);
-        io.to(code).emit("playerDisconnected", {
+        if (!room.closing) scheduleReconnectExpiry(room, color);
+        if (!room.closing && !room.gameOver) io.to(code).emit("playerDisconnected", {
+          code,
           reconnectDeadline: room.reconnectDeadlines[color],
+          serverTime: Date.now(),
           message: "O jogador desconectou. Aguardando reconexão.",
           color,
           reason
