@@ -934,22 +934,41 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
    TELA DE DESCONEXÃO — NEON VERMELHO
    ========================================= */
 
-.disconnect-overlay[hidden] {
-  display: none !important;
+.offline-notice {
+  position: fixed;
+  inset: auto 1rem 1rem auto;
+  z-index: 10;
+  max-width: calc(100vw - 2rem);
+  padding: .55rem .8rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  color: var(--text);
+  background: var(--panel);
+  font-size: .875rem;
 }
+
+.offline-notice:not([hidden]) { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.offline-notice .btn { width: auto; min-height: 36px; padding: .3rem .6rem; }
+
+.disconnect-overlay:not([open]) { display: none; }
 
 .disconnect-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 18px;
-  background: rgba(0, 0, 0, 0.88);
-  backdrop-filter: blur(7px);
-  animation: disconnect-fade 0.3s ease;
+  width: min(calc(100% - 32px), 620px);
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  border: 2px solid #ff4a57;
+  border-radius: 18px;
+  background: #100609;
+  color: #f5dfe3;
+  box-shadow: 0 0 12px #ff263f, 0 0 45px #ff263f80;
+  animation: disconnect-fade .2s ease;
 }
+
+.disconnect-overlay::backdrop { background: rgb(0 0 0 / 78%); }
 
 .disconnect-modal {
   position: relative;
@@ -957,8 +976,7 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
   padding: 42px 35px;
   overflow: hidden;
   text-align: center;
-  border: 2px solid #ff263f;
-  border-radius: 18px;
+  border-radius: inherit;
   background:
     radial-gradient(ellipse at top, #4b0714 0%, transparent 65%),
     linear-gradient(145deg, #16060b, #050507);
@@ -967,22 +985,51 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
     0 0 30px #ff263f99,
     0 0 75px #ff102b55,
     inset 0 0 35px #ff102b18;
-  animation: disconnect-glow 1.8s ease-in-out infinite;
+
 }
 
 .disconnect-icon {
-  margin-bottom: 12px;
-  color: #ff263f;
-  font-size: 72px;
-  line-height: 1;
-  text-shadow:
-    0 0 10px #ff263f,
-    0 0 30px #ff263f;
+  position: relative;
+  width: 68px;
+  height: 45px;
+  margin: 0 auto 12px;
+  color: #ff5260;
+}
+
+.disconnect-icon::before,
+.disconnect-icon::after,
+.disconnect-icon span::before {
+  position: absolute;
+  content: "";
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: currentColor;
+  border-radius: 50%;
+}
+
+.disconnect-icon::before { width: 64px; height: 48px; top: 0; }
+.disconnect-icon::after { width: 43px; height: 32px; top: 11px; }
+.disconnect-icon span::before { width: 22px; height: 18px; top: 22px; }
+.disconnect-icon span::after {
+  position: absolute;
+  content: "";
+  left: 31px;
+  top: -1px;
+  width: 5px;
+  height: 50px;
+  border-radius: 3px;
+  background: currentColor;
+  box-shadow: 0 0 0 3px #30090f, 0 0 12px #ff263f;
+  transform: rotate(-42deg);
+  z-index: 1;
 }
 
 .disconnect-modal h2 {
+  overflow-wrap: anywhere;
   margin: 10px 0;
-  color: #ff3049;
+  color: #ff6674;
+  text-transform: uppercase;
   font-size: clamp(28px, 6vw, 46px);
   letter-spacing: 4px;
   text-shadow:
@@ -1022,7 +1069,8 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
 
 .disconnect-countdown {
   width: fit-content;
-  min-width: 220px;
+  min-width: min(100%, 220px);
+  font-family: "Courier New", monospace;
   margin: 12px auto 18px;
   padding: 12px 25px;
   border: 2px solid #ff263f;
@@ -1043,53 +1091,6 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
   color: #d8c5ca;
   font-size: 13px;
   line-height: 1.7;
-}
-
-.btn-reconnect {
-  width: min(100%, 430px);
-  min-height: 58px;
-  padding: 14px;
-  border: 2px solid #ff5268;
-  border-radius: 10px;
-  background: linear-gradient(100deg, #790b20, #c51432);
-  color: white;
-  font-size: 14px;
-  font-weight: 900;
-  letter-spacing: 1px;
-  box-shadow:
-    0 0 12px #ff263f88,
-    0 0 28px #ff263f44;
-  transition: 0.2s ease;
-}
-
-.btn-reconnect:hover {
-  background: #ed1839;
-  box-shadow:
-    0 0 18px #ff263f,
-    0 0 40px #ff263f88;
-  transform: translateY(-2px);
-}
-
-.btn-reconnect:active {
-  transform: scale(0.98);
-}
-
-@keyframes disconnect-glow {
-  0%, 100% {
-    box-shadow:
-      0 0 10px #ff263f,
-      0 0 30px #ff263f77,
-      0 0 65px #ff102b33,
-      inset 0 0 25px #ff102b15;
-  }
-
-  50% {
-    box-shadow:
-      0 0 16px #ff263f,
-      0 0 45px #ff263fbb,
-      0 0 90px #ff102b66,
-      inset 0 0 40px #ff102b25;
-  }
 }
 
 @keyframes disconnect-fade {
@@ -1121,14 +1122,12 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
   }
 
   .disconnect-countdown {
-    min-width: 190px;
+    min-width: min(100%, 190px);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .disconnect-modal {
-    animation: none;
-  }
+  .disconnect-overlay { animation: none; }
 }
 /* =========================================
    PAINEL DE APOSTAS VIRTUAIS

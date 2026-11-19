@@ -53,15 +53,17 @@ const betStatusElement = $("bet-status");
   let getFirebaseToken = null;
   let onlineBet = null;
   let nicknames = { black: null, white: null };
-  let disconnectTimer = null;
   let opponentConnected = false;
   let submittedNickname = null;
   let walletGeneration = 0;
   let walletRetry = null;
   let walletBalance = null;
   let bettingAvailable = false;
-  let reconnectGraceMs = 120000;
-  let disconnectDeadline = null;
+  let opponentTimer = null;
+  let reconnectTimer = null;
+  let attemptTimer = null;
+  let connectionAttempt = 0;
+  let sessionReplaced = false;
 
   let onlineRoomCode = null;
   let onlinePlayerColor = null;
@@ -480,27 +482,45 @@ const betStatusElement = $("bet-status");
     })[onlineBet?.status] || "Aguardando uma aposta.";
   }
 
-  function hideDisconnectOverlay() {
-    clearInterval(disconnectTimer);
-    disconnectTimer = null;
-    disconnectDeadline = null;
-    $("disconnect-overlay").hidden = true;
+  function hideOpponentAlert() {
+    clearInterval(opponentTimer);
+    opponentTimer = null;
+    const overlay = $("disconnect-overlay");
+    if (overlay.open) overlay.close();
   }
 
-  function showDisconnectOverlay() {
-    clearInterval(disconnectTimer);
-    const overlay = $("disconnect-overlay");
-    overlay.hidden = false;
-    // Local estimate until the server confirms the state of the room.
-    disconnectDeadline ??= Date.now() + reconnectGraceMs;
-    const countdown = $("disconnect-countdown");
-    function tick() {
-      const remaining = Math.max(0, Math.ceil((disconnectDeadline - Date.now()) / 1000));
-      countdown.textContent = `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
-      if (!remaining) clearInterval(disconnectTimer);
+  function showOpponentAlert(deadline, serverTime) {
+    if (!socket?.connected || gameOver || opponentConnected || !onlineRoomCode) {
+      hideOpponentAlert();
+      return;
     }
-    tick();
-    disconnectTimer = setInterval(tick, 1000);
+
+    clearInterval(opponentTimer);
+    const overlay = $("disconnect-overlay");
+    const countdown = $("disconnect-countdown");
+    const status = $("disconnect-status");
+    status.textContent = "Aguardando o adversário voltar.";
+    if (!overlay.open) overlay.showModal();
+
+    if (!Number.isFinite(deadline) || !Number.isFinite(serverTime)) {
+      countdown.textContent = "—";
+      return;
+    }
+
+    const localDeadline = performance.now() + Math.max(0, deadline - serverTime);
+    function update() {
+      const seconds = Math.max(0, Math.ceil((localDeadline - performance.now()) / 1000));
+      const minutes = String(Math.floor(seconds / 60)).padStart(2, "0");
+      const remainder = String(seconds % 60).padStart(2, "0");
+      countdown.textContent = `${minutes}:${remainder}`;
+      if (!seconds) {
+        clearInterval(opponentTimer);
+        opponentTimer = null;
+        status.textContent = "Prazo encerrado. Aguardando o resultado do servidor.";
+      }
+    }
+    opponentTimer = setInterval(update, 250);
+    update();
   }
 
   function clearOnlineRoom(message) {
@@ -511,8 +531,9 @@ const betStatusElement = $("bet-status");
     onlineBet = null;
     nicknames = { black: null, white: null };
     roomCodeInput.value = "";
+    $("offline-notice").hidden = true;
     $("leave-room").hidden = true;
-    hideDisconnectOverlay();
+    hideOpponentAlert();
     resetBoard();
     renderBoard();
     updatePlayerCards();
@@ -546,16 +567,15 @@ const betStatusElement = $("bet-status");
     onlineGameActive = Boolean(payload.started) && !gameOver;
     opponentConnected = Boolean(payload.players?.[onlinePlayerColor === WHITE ? BLACK : WHITE]);
     onlineBet = payload.bet || null;
-    if (Number.isFinite(payload.reconnectGraceMs)) reconnectGraceMs = payload.reconnectGraceMs;
     nicknames = payload.nicknames || { black: null, white: null };
     selectedPiece = mustContinue && turn === onlinePlayerColor
       ? { row: mustContinue.r, col: mustContinue.c }
       : null;
     legalMoves = selectedPiece ? legalMovesFor(selectedPiece.row, selectedPiece.col) : [];
 
+    $("offline-notice").hidden = true;
     $("leave-room").hidden = false;
     $("leave-room").textContent = onlineGameActive ? "Desistir" : "Sair da sala";
-    hideDisconnectOverlay();
     renderBoard();
     updatePlayerCards();
     renderBet();
@@ -571,9 +591,15 @@ const betStatusElement = $("bet-status");
     if (gameOver) updateTurnBanner(message, "finished");
     else if (!opponentConnected && onlineGameActive) updateTurnBanner("AGUARDANDO RECONEXÃO", "waiting");
     else updateTurnBanner();
+
+    const opponent = onlinePlayerColor === WHITE ? BLACK : WHITE;
+    if (onlineGameActive && !opponentConnected) showOpponentAlert(payload.reconnectDeadlines?.[opponent], payload.serverTime);
+    else hideOpponentAlert();
   }
 
   function disconnectSocket() {
+    cancelConnectionTimers();
+    sessionReplaced = false;
     if (socket) {
       socket.removeAllListeners();
       socket.disconnect();
@@ -591,24 +617,65 @@ const betStatusElement = $("bet-status");
     renderBet();
   }
 
+  function cancelConnectionTimers() {
+    clearTimeout(reconnectTimer);
+    clearTimeout(attemptTimer);
+    reconnectTimer = attemptTimer = null;
+    connectionAttempt++;
+    $("retry-connection").disabled = false;
+  }
+
+  function scheduleConnectionAttempt() {
+    if (!socket || !getFirebaseToken || sessionReplaced || socket.connected || attemptTimer || reconnectTimer) return;
+    reconnectTimer = setTimeout(attemptConnection, 2000);
+  }
+
+  function attemptConnection() {
+    if (!socket || !getFirebaseToken || sessionReplaced || socket.connected || attemptTimer) return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+
+    const notice = $("offline-notice");
+    const feedback = $("offline-status");
+    if (navigator.onLine === false) {
+      if (!notice.hidden) feedback.textContent = "Sem conexão. Tentaremos novamente quando ela voltar.";
+      scheduleConnectionAttempt();
+      return;
+    }
+
+    const current = socket;
+    cancelConnectionTimers();
+    if (!notice.hidden) feedback.textContent = "Tentando reconectar…";
+    $("retry-connection").disabled = true;
+    attemptTimer = setTimeout(() => {
+      if (socket !== current) return;
+      cancelConnectionTimers();
+      if (current.connected) return;
+      current.disconnect();
+      if (!notice.hidden) feedback.textContent = "A conexão demorou. Tentaremos novamente.";
+      scheduleConnectionAttempt();
+    }, 10000);
+    current.connect();
+  }
+
   function connectSocket() {
     if (socket || typeof io !== "function") return;
 
     socket = io({
       autoConnect: false,
+      reconnection: false,
+      tryAllTransports: true,
+      timeout: 8000,
       auth: async callback => {
-        try {
-          callback({ token: await getFirebaseToken?.() });
-        } catch {
-          callback({});
-        }
-      },
-      reconnection: true,
-      reconnectionDelay: 1000
+        const current = socket;
+        const attempt = connectionAttempt;
+        const token = await Promise.resolve().then(() => getFirebaseToken?.()).catch(() => null);
+        if (socket === current && connectionAttempt === attempt) callback(token ? { token } : {});
+      }
     });
 
     registerSocketEvents();
-    socket.connect();
+    attemptConnection();
   }
 
 function registerSocketEvents() {
@@ -618,6 +685,7 @@ function registerSocketEvents() {
   // =============================================
 
   socket.on("connect", () => {
+    cancelConnectionTimers();
     console.log("[SOCKET] Conectado:", socket.id);
 
     // Solicita o saldo da carteira
@@ -627,6 +695,7 @@ function registerSocketEvents() {
     if (onlineRoomCode) {
       onlineGameActive = false;
       movePending = false;
+      if (!$("offline-notice").hidden) $("offline-status").textContent = "Conectado. Recuperando a partida…";
 
       setStatus("Conexão restabelecida. Recuperando a partida...");
       setRoomInfo(`Tentando recuperar a sala ${onlineRoomCode}...`);
@@ -680,20 +749,29 @@ function registerSocketEvents() {
   socket.on("roomLeft", payload => clearOnlineRoom(payload.message));
   socket.on("playerLeft", payload => clearOnlineRoom(payload.message));
   socket.on("playerDisconnected", payload => {
+    if (payload.code !== onlineRoomCode) return;
     movePending = false;
     opponentConnected = false;
     if (gameOver) return;
     setRoomInfo(payload.message);
+    if (onlineGameActive) showOpponentAlert(payload.reconnectDeadline, payload.serverTime);
     updateTurnBanner("AGUARDANDO RECONEXÃO", "waiting");
     renderBet();
   });
 
   socket.on("connect_error", error => {
+    cancelConnectionTimers();
+    if (!$("offline-notice").hidden) $("offline-status").textContent = "Ainda sem conexão. Tentaremos novamente.";
+    scheduleConnectionAttempt();
     setStatus("Falha ao conectar ao servidor.");
     setRoomInfo(error?.message || "Verifique o login e o servidor.");
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", reason => {
+    cancelConnectionTimers();
+    sessionReplaced = reason === "io server disconnect";
+    scheduleConnectionAttempt();
+    hideOpponentAlert();
     bettingAvailable = false;
     requestWallet();
     onlineGameActive = false;
@@ -701,9 +779,12 @@ function registerSocketEvents() {
     $("profile-save").disabled = true;
     renderBet();
     if (!onlineRoomCode) return;
+    $("offline-status").textContent = sessionReplaced
+      ? "A partida foi aberta em outra aba. Retome aqui se quiser continuar nesta janela."
+      : "Conexão perdida. Tentando reconectar…";
+    $("offline-notice").hidden = false;
     setStatus("Conexão perdida. Aguardando reconexão.");
     updateTurnBanner("RECONEXÃO NECESSÁRIA", "waiting");
-    showDisconnectOverlay();
   });
 
     socket.on("roomCreated", payload => {
@@ -803,11 +884,12 @@ function registerRoomControls() {
   $("leave-room").addEventListener("click", () => {
     if (socket?.connected) socket.emit(onlineGameActive ? "resignGame" : "leaveRoom");
   });
-  $("reconnect-button").addEventListener("click", () => {
-    if (socket?.connected) socket.emit("requestRoomState");
-    else socket?.connect();
+  $("disconnect-overlay").addEventListener("cancel", event => event.preventDefault());
+  $("retry-connection").addEventListener("click", () => {
+    sessionReplaced = false;
+    attemptConnection();
   });
-
+  window.addEventListener("online", attemptConnection);
   createRoomButton.addEventListener("click", () => {
     if (!socket?.connected) {
       setRoomInfo("Entre na sua conta e aguarde a conexão.");
