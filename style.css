@@ -1209,3 +1209,21 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
 #bet-status {
   margin-top: 15px;
 }
+.cell.captured .piece { opacity: .45; }
+#leave-room[hidden] { display: none; }
+.cell:focus-visible { outline: 3px solid #fff; outline-offset: -3px; z-index: 1; }
+
+.profile-form { display: grid; gap: .5rem; margin-top: 1rem; }
+.profile-form[hidden] { display: none; }
+.profile-controls { display: flex; flex-wrap: wrap; gap: .5rem; }
+.profile-controls input {
+  min-width: 0;
+  flex: 1 1 12rem;
+  padding: .55rem .75rem;
+  color: inherit;
+  background: #070e1f;
+  border: 1px solid #587390;
+  border-radius: .5rem;
+}
+#profile-help { font-size: .85rem; }
+#auth-play-local { margin-top: .75rem; }

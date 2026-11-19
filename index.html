@@ -14,6 +14,7 @@
   <script src="/socket.io/socket.io.js"></script>
 
   <!-- Lógica principal do jogo -->
+  <script src="/rules.js" defer></script>
   <script src="/script.js" defer></script>
 </head>
 
@@ -44,7 +45,7 @@
       <div class="section-heading">
         <span class="eyebrow">IDENTIFICAÇÃO</span>
         <h2>Sua conta</h2>
-        <p>Entre com o Google para identificar seu perfil de jogador.</p>
+        <p>Conecte sua conta para jogar online.</p>
       </div>
 
       <div class="login-content">
@@ -54,8 +55,7 @@
           <strong id="login-status" aria-live="polite">
             Você não está conectado.
           </strong>
-
-          <p id="login-email">Entre para carregar sua conta.</p>
+          <p id="login-email" hidden></p>
         </div>
       </div>
 
@@ -65,7 +65,7 @@
           class="btn btn-primary"
           type="button"
         >
-          Entrar com Google
+          Entrar na conta
         </button>
 
         <button
@@ -77,6 +77,17 @@
           Sair da conta
         </button>
       </div>
+
+      <form id="profile-form" class="profile-form" hidden>
+        <label for="profile-nickname">Apelido público</label>
+        <div class="profile-controls">
+          <input id="profile-nickname" name="nickname" maxlength="48"
+            placeholder="Jogador" autocomplete="off" aria-describedby="profile-help">
+          <button id="profile-save" class="btn btn-secondary" type="submit" disabled>Salvar apelido</button>
+        </div>
+        <p id="profile-help">O adversário vê o apelido na partida. Deixe em branco para usar o nome padrão.</p>
+        <p id="profile-message" class="wallet-message" role="status"></p>
+      </form>
 
       <p id="login-message" class="wallet-message" role="status">
         Entre para identificar sua conta de jogador.
@@ -192,8 +203,7 @@
           <div class="match-tip">
             <span aria-hidden="true">✦</span>
             <p>
-              Capturas são obrigatórias. Se puder continuar capturando,
-              use a mesma peça.
+              Capture o maior número de peças possível com a mesma peça.
             </p>
           </div>
 
@@ -203,6 +213,9 @@
             type="button"
           >
             ↻ Nova partida local
+          </button>
+          <button id="leave-room" class="btn btn-secondary" type="button" hidden>
+            Sair da sala
           </button>
         </section>
         <!-- SISTEMA DE APOSTAS -->
@@ -357,7 +370,7 @@
     <div class="disconnect-divider"></div>
 
     <span class="disconnect-label">
-      TEMPO PARA RECONEXÃO
+      TEMPO ESTIMADO PARA RECONEXÃO
     </span>
 
     <div id="disconnect-countdown" class="disconnect-countdown">
@@ -365,8 +378,7 @@
     </div>
 
     <p class="disconnect-warning">
-      Se você não reconectar antes do tempo acabar,
-      poderá perder a partida por abandono.
+      Se o prazo terminar, a sala será encerrada e os créditos reservados serão estornados.
     </p>
 
     <button

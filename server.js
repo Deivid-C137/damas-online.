@@ -1,11 +1,13 @@
 
 "use strict";
-require("dotenv").config();
+if (!process.env.FIREBASE_AUTH_EMULATOR_HOST) require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
 const { Pool } = require("pg");
+const { createSettlement } = require("./settlement");
+const { validateNickname } = require("./nicknames");
 
 const { Server } = require("socket.io");
 const {
@@ -29,6 +31,22 @@ const io = new Server(httpServer, {
 });
 
 const PORT = Number(process.env.PORT) || 3000;
+const emulatorHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
+const projectId = process.env.GCLOUD_PROJECT;
+const localSdk = process.env.DAMAS_LOCAL_FIREBASE_SDK;
+const HOST = emulatorHost ? "127.0.0.1" : (process.env.HOST || "0.0.0.0");
+
+if (emulatorHost) {
+  const isLocalDb = !process.env.DATABASE_URL ||
+    ["127.0.0.1", "localhost", "[::1]"].includes(new URL(process.env.DATABASE_URL).hostname);
+  if (!/^(127\.0\.0\.1|localhost):[0-9]+$/.test(emulatorHost) ||
+      !/^demo-[a-z0-9-]+$/.test(projectId || "") || !isLocalDb) {
+    throw new Error("O emulador exige projeto demo-, Firebase local e banco local.");
+  }
+}
+const configuredGrace = Number(process.env.DAMAS_TEST_RECONNECT_MS);
+const RECONNECT_GRACE_MS = emulatorHost && Number.isInteger(configuredGrace) && configuredGrace > 0
+  ? configuredGrace : 120000;
 // ======================================================
 // CONEXÃO COM O POSTGRESQL — SUPABASE
 // ======================================================
@@ -36,11 +54,12 @@ const PORT = Number(process.env.PORT) || 3000;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_SSL === "true"
-    ? { rejectUnauthorized: false }
+    ? { rejectUnauthorized: true, ca: process.env.DATABASE_CA || undefined }
     : false,
   max: 10,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000
+  connectionTimeoutMillis: 10000,
+  statement_timeout: 5000
 });
 
 pool.on("error", error => {
@@ -103,10 +122,7 @@ async function getWalletBalance(uid) {
 
   return Number(result.rows[0].balance);
 }
-const SIZE = 8;
-const BLACK = "black";
-const WHITE = "white";
-const RECONNECT_GRACE_MS = 120000;
+const { BLACK, WHITE, inside, cloneBoard, createMatch, getLegalMoves, applyMove } = require("./rules");
 
 const rooms = new Map();
 const socketRooms = new Map();
@@ -126,6 +142,13 @@ function initializeFirebase() {
     if (getApps().length > 0) {
       firebaseReady = true;
       console.log("[Firebase] Aplicativo já inicializado.");
+      return;
+    }
+
+    if (emulatorHost) {
+      initializeApp({ projectId });
+      firebaseReady = true;
+      console.log("[Firebase] Emulador local inicializado.");
       return;
     }
 
@@ -163,6 +186,7 @@ app.get("/health", (_req, res) => {
     status: "ok",
     service: "damas-online",
     firebaseReady,
+    bettingReady,
     activeRooms: rooms.size,
     timestamp: new Date().toISOString()
   });
@@ -187,75 +211,26 @@ app.get("/health/db", async (_req, res) => {
     });
   }
 });
-app.use(express.static(__dirname));
-
-app.get(/.*/, (req, res, next) => {
-    if (
-    req.path.startsWith("/socket.io/") ||
-    req.path === "/health" ||
-    req.path === "/health/db"
-  ) {
-    return next();
-  }
-
-  res.sendFile(path.join(__dirname, "index.html"), error => {
-    if (error && !res.headersSent) {
-      res.status(404).send("Página não encontrada.");
-    }
-  });
+for (const file of ["index.html", "style.css", "rules.js", "script.js", "auth.js"]) {
+  app.get(file === "index.html" ? ["/", "/index.html"] : `/${file}`,
+    (_req, res) => res.sendFile(path.join(__dirname, file)));
+}
+app.use("/assets", express.static(path.join(__dirname, "assets")));
+app.get("/auth-config", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json(emulatorHost ? {
+    emulator: `http://${emulatorHost}`,
+    projectId,
+    sdk: localSdk ? "/local-firebase-sdk.js" : null
+  } : {});
 });
+if (emulatorHost && localSdk) {
+  app.get("/local-firebase-sdk.js", (_req, res) => res.sendFile(path.resolve(localSdk)));
+}
 
 // ======================================================
 // UTILITÁRIOS
 // ======================================================
-
-function inside(r, c) {
-  return Number.isInteger(r) &&
-    Number.isInteger(c) &&
-    r >= 0 && r < SIZE &&
-    c >= 0 && c < SIZE;
-}
-
-function otherColor(color) {
-  return color === BLACK ? WHITE : BLACK;
-}
-
-function positionKey(r, c) {
-  return `${r},${c}`;
-}
-
-function cloneBoard(board) {
-  return board.map(row => row.map(piece =>
-    piece
-      ? { color: piece.color, king: Boolean(piece.king) }
-      : null
-  ));
-}
-
-function createInitialBoard() {
-  const board = Array.from(
-    { length: SIZE },
-    () => Array(SIZE).fill(null)
-  );
-
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < SIZE; c++) {
-      if ((r + c) % 2 === 1) {
-        board[r][c] = { color: BLACK, king: false };
-      }
-    }
-  }
-
-  for (let r = 5; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
-      if ((r + c) % 2 === 1) {
-        board[r][c] = { color: WHITE, king: false };
-      }
-    }
-  }
-
-  return board;
-}
 
 function createRoomCode() {
   let code = "";
@@ -310,10 +285,13 @@ function roomSnapshot(room) {
     winner: room.winner,
     started: room.started,
     bet: room.bet ? {
-  id: room.bet.id,
-  amount: room.bet.amount,
-  status: room.bet.status
-} : null,
+      id: room.bet.id,
+      amount: room.bet.amount,
+      status: room.bet.status,
+      responderColor: room.playerUids.black === room.bet.opponentUid ? BLACK : WHITE
+    } : null,
+    reconnectDeadline: room.reconnectDeadline,
+    nicknames: { ...room.nicknames },
     players: {
       black: Boolean(room.players.black),
       white: Boolean(room.players.white)
@@ -324,8 +302,8 @@ function roomSnapshot(room) {
 function createRoomState(code, socketId, uid) {
   return {
     code,
-    board: createInitialBoard(),
-    turn: WHITE,
+    ...createMatch(),
+    nicknames: { black: null, white: null },
 
     players: {
       black: socketId,
@@ -337,9 +315,6 @@ function createRoomState(code, socketId, uid) {
       white: null
     },
 
-    mustContinue: null,
-    capturedThisTurn: [],
-
     gameOver: false,
 winner: null,
 started: false,
@@ -347,6 +322,9 @@ started: false,
 // SISTEMA DE APOSTAS
 bet: null,
 
+    operations: Promise.resolve(),
+    closing: false,
+    reconnectDeadline: null,
     createdAt: Date.now(),
     lastMoveAt: null
   };
@@ -366,44 +344,38 @@ function clearReconnectTimer(code, color) {
   }
 }
 
-function scheduleReconnectExpiry(room, color, disconnectedSocketId) {
-  const code = room.code;
-  const key = `${code}:${color}`;
-
-  clearReconnectTimer(code, color);
-
+function scheduleReconnectExpiry(room, color) {
+  const key = `${room.code}:${color}`;
+  clearReconnectTimer(room.code, color);
+  room.reconnectDeadline ??= Date.now() + RECONNECT_GRACE_MS;
   const timer = setTimeout(() => {
     reconnectTimers.delete(key);
-
-    const currentRoom = rooms.get(code);
-    if (!currentRoom || currentRoom.gameOver) return;
-
-    // Só encerra a vaga se o jogador ainda estiver desconectado.
-    if (currentRoom.players[color] !== null) return;
-
-    if (currentRoom.playerUids[color] === null) return;
-
-    currentRoom.playerUids[color] = null;
-
-    io.to(code).emit("playerLeft", {
-      color,
-      message: "O prazo para reconexão terminou."
-    });
-
-    console.log(
-      `[Sala] ${code}: prazo de reconexão expirou para ${color}.`
-    );
-
-    // Uma sala sem jogadores conectados pode ser removida.
-    if (!currentRoom.players.black && !currentRoom.players.white) {
-      deleteRoom(code);
-    } else {
-      currentRoom.started = false;
+    if (room.players[color] === null) {
+      closeRoom(room, "O prazo para reconexão terminou. A partida foi encerrada.");
     }
-  }, RECONNECT_GRACE_MS);
-
-  timer.unref?.();
+  }, room.reconnectDeadline - Date.now());
+  timer.unref();
   reconnectTimers.set(key, timer);
+}
+
+function enqueueRoom(room, operation) {
+  const result = room.operations.then(operation);
+  room.operations = result.catch(() => {});
+  return result;
+}
+
+function closeRoom(room, message) {
+  if (room.closing) return;
+  room.closing = true;
+  io.to(room.code).emit("playerLeft", { code: room.code, message });
+  deleteRoom(room.code);
+
+  // Finish a bet request/acceptance already in flight before deciding its outcome.
+  void enqueueRoom(room, async () => {
+    if (room.bet && ["pending", "reserved"].includes(room.bet.status)) {
+      await resolveBet(room, room.winner || null);
+    }
+  }).catch(error => console.error("[Sala] Encerramento:", error.message));
 }
 
 function deleteRoom(code) {
@@ -432,284 +404,6 @@ function deleteRoom(code) {
 // MOVIMENTOS SIMPLES
 // ======================================================
 
-function getSimpleMoves(room, r, c) {
-  const piece = room.board[r]?.[c];
-  if (!piece) return [];
-
-  const moves = [];
-  const directions = piece.king
-    ? [[-1, -1], [-1, 1], [1, -1], [1, 1]]
-    : [[piece.color === BLACK ? 1 : -1, -1],
-       [piece.color === BLACK ? 1 : -1, 1]];
-
-  for (const [dr, dc] of directions) {
-    let nr = r + dr;
-    let nc = c + dc;
-
-    while (inside(nr, nc) && !room.board[nr][nc]) {
-      moves.push({ r: nr, c: nc, capture: null });
-
-      if (!piece.king) break;
-
-      nr += dr;
-      nc += dc;
-    }
-  }
-
-  return moves;
-}
-
-// ======================================================
-// CAPTURAS
-// ======================================================
-
-function getCaptures(room, r, c) {
-  const piece = room.board[r]?.[c];
-  if (!piece) return [];
-
-  const board = room.board;
-  const captures = [];
-
-  const alreadyCaptured = new Set(
-    (room.capturedThisTurn || []).map(pos =>
-      positionKey(pos.r, pos.c)
-    )
-  );
-
-  const directions = [
-    [-1, -1], [-1, 1], [1, -1], [1, 1]
-  ];
-
-  for (const [dr, dc] of directions) {
-    let nr = r + dr;
-    let nc = c + dc;
-
-    if (!piece.king) {
-      if (!inside(nr, nc)) continue;
-
-      const target = board[nr][nc];
-
-      if (!target || target.color === piece.color) continue;
-      if (alreadyCaptured.has(positionKey(nr, nc))) continue;
-
-      const landR = nr + dr;
-      const landC = nc + dc;
-
-      if (inside(landR, landC) && !board[landR][landC]) {
-        captures.push({
-          r: landR,
-          c: landC,
-          capture: { r: nr, c: nc }
-        });
-      }
-
-      continue;
-    }
-
-    let enemy = null;
-
-    while (inside(nr, nc)) {
-      const occupant = board[nr][nc];
-
-      if (!occupant) {
-        if (enemy) {
-          captures.push({
-            r: nr,
-            c: nc,
-            capture: { r: enemy.r, c: enemy.c }
-          });
-        }
-      } else {
-        if (occupant.color === piece.color || enemy) break;
-
-        if (alreadyCaptured.has(positionKey(nr, nc))) break;
-
-        enemy = { r: nr, c: nc };
-      }
-
-      nr += dr;
-      nc += dc;
-    }
-  }
-
-  return captures;
-}
-
-function getAllCaptures(room, color) {
-  const result = [];
-
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
-      const piece = room.board[r][c];
-
-      if (!piece || piece.color !== color) continue;
-
-      for (const move of getCaptures(room, r, c)) {
-        result.push({
-          from: { r, c },
-          to: { r: move.r, c: move.c },
-          capture: move.capture
-        });
-      }
-    }
-  }
-
-  return result;
-}
-
-// ======================================================
-// CAPTURA MÁXIMA
-// ======================================================
-
-function countMaximumCaptures(board, r, c, captured = []) {
-  const piece = board[r]?.[c];
-  if (!piece) return 0;
-
-  const simulatedRoom = {
-    board,
-    capturedThisTurn: captured
-  };
-
-  const moves = getCaptures(simulatedRoom, r, c);
-  let maximum = 0;
-
-  for (const move of moves) {
-    const nextBoard = cloneBoard(board);
-    const movingPiece = nextBoard[r][c];
-
-    nextBoard[r][c] = null;
-    nextBoard[move.r][move.c] = movingPiece;
-
-    const nextCaptured = [
-      ...captured,
-      { r: move.capture.r, c: move.capture.c }
-    ];
-
-    const continuation = countMaximumCaptures(
-      nextBoard,
-      move.r,
-      move.c,
-      nextCaptured
-    );
-
-    maximum = Math.max(maximum, 1 + continuation);
-  }
-
-  return maximum;
-}
-
-function getMaximumCaptureCount(room, color) {
-  let maximum = 0;
-
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
-      const piece = room.board[r][c];
-
-      if (!piece || piece.color !== color) continue;
-
-      maximum = Math.max(
-        maximum,
-        countMaximumCaptures(room.board, r, c, [])
-      );
-    }
-  }
-
-  return maximum;
-}
-
-function getLegalMoves(room, r, c, color) {
-  if (!inside(r, c)) return [];
-
-  const piece = room.board[r][c];
-
-  if (!piece || piece.color !== color) return [];
-
-  if (room.mustContinue) {
-    if (
-      room.mustContinue.r !== r ||
-      room.mustContinue.c !== c
-    ) {
-      return [];
-    }
-
-    return getCaptures(room, r, c);
-  }
-
-  const allCaptures = getAllCaptures(room, color);
-
-  if (allCaptures.length > 0) {
-    const maximum = getMaximumCaptureCount(room, color);
-
-    return allCaptures
-      .filter(move =>
-        move.from.r === r &&
-        move.from.c === c &&
-        countMaximumCaptures(room.board, r, c, []) === maximum
-      )
-      .map(move => ({
-        r: move.to.r,
-        c: move.to.c,
-        capture: move.capture
-      }));
-  }
-
-  return getSimpleMoves(room, r, c);
-}
-
-function hasAnyLegalMove(room, color) {
-  if (getAllCaptures(room, color).length > 0) return true;
-
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
-      const piece = room.board[r][c];
-
-      if (piece && piece.color === color &&
-          getSimpleMoves(room, r, c).length > 0) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-function countPieces(room, color) {
-  let count = 0;
-
-  for (const row of room.board) {
-    for (const piece of row) {
-      if (piece && piece.color === color) count++;
-    }
-  }
-
-  return count;
-}
-
-function promotePiece(piece, row) {
-  if (!piece || piece.king) return;
-
-  if (
-    (piece.color === BLACK && row === SIZE - 1) ||
-    (piece.color === WHITE && row === 0)
-  ) {
-    piece.king = true;
-  }
-}
-
-function removeCapturedPieces(room) {
-  for (const pos of room.capturedThisTurn) {
-    if (inside(pos.r, pos.c)) {
-      room.board[pos.r][pos.c] = null;
-    }
-  }
-
-  room.capturedThisTurn = [];
-}
-
-// ======================================================
-// ESTADO E FIM DA PARTIDA
-// ======================================================
-
 function broadcastBoard(room, message) {
   io.to(room.code).emit("boardUpdate", {
     ...roomSnapshot(room),
@@ -723,10 +417,10 @@ function broadcastBoard(room, message) {
 function validateBetAmount(amount) {
   const value = Number(amount);
 
-  if (!Number.isFinite(value) || value <= 0 || value > 5) {
+  if (!Number.isFinite(value) || value < 0.01 || value > 5) {
     return {
       valid: false,
-      message: "A aposta deve ser maior que zero e de no máximo 5 créditos."
+      message: "A aposta deve ser entre 0,01 e 5 créditos."
     };
   }
 
@@ -745,7 +439,7 @@ async function createBetRequest(room, creatorUid, amount) {
     throw new Error(validation.message);
   }
 
-  if (!room.started || room.gameOver) {
+  if (!room.started || room.gameOver || room.closing) {
     throw new Error("A partida não está disponível para apostas.");
   }
 
@@ -767,7 +461,7 @@ async function createBetRequest(room, creatorUid, amount) {
     throw new Error("Você não pertence a esta partida.");
   }
 
-  const balance = await getWalletBalance(creatorUid);
+  const [balance] = await Promise.all([getOrCreateWallet(creatorUid), getOrCreateWallet(opponentUid)]);
 
   if (balance < validation.amount) {
     throw new Error("Saldo insuficiente para essa aposta.");
@@ -814,7 +508,8 @@ async function respondToBet(room, opponentUid, accepted) {
   try {
     await client.query("BEGIN");
 
-    if (!room.bet || room.bet.status !== "pending") {
+    if (room.closing || room.gameOver || !room.players.black || !room.players.white ||
+        !room.bet || room.bet.status !== "pending") {
       throw new Error("Não existe uma aposta pendente.");
     }
 
@@ -938,225 +633,114 @@ async function respondToBet(room, opponentUid, accepted) {
 // PAGAMENTO DO VENCEDOR DA APOSTA
 // ======================================================
 
-async function settleBet(room, winnerColor) {
-  if (!room.bet || room.bet.status !== "reserved") {
-    return null;
-  }
+const { recordResolution, settle } = createSettlement(pool);
+const settlementQueue = new Map();
+let bettingReady = false;
+let recoveryConnection = null;
 
-  const winnerUid = room.playerUids[winnerColor];
-
-  if (!winnerUid) {
-    throw new Error("Não foi possível identificar o vencedor.");
-  }
-
-  const betId = room.bet.id;
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const betResult = await client.query(
-      `SELECT *
-       FROM public.bets
-       WHERE id = $1
-       FOR UPDATE`,
-      [betId]
-    );
-
-    if (
-      betResult.rowCount !== 1 ||
-      betResult.rows[0].status !== "reserved"
-    ) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const bet = betResult.rows[0];
-
-    if (
-      winnerUid !== bet.creator_uid &&
-      winnerUid !== bet.opponent_uid
-    ) {
-      throw new Error("O vencedor não pertence a esta aposta.");
-    }
-
-    const loserUid =
-      winnerUid === bet.creator_uid
-        ? bet.opponent_uid
-        : bet.creator_uid;
-
-    const amount = Number(bet.amount);
-    const commission = Math.round(amount * 10) / 100;
-    const payout = amount * 2 - commission;
-
-    const players = [winnerUid, loserUid].sort();
-
-    const wallets = await client.query(
-      `SELECT firebase_uid
-       FROM public.wallet_accounts
-       WHERE firebase_uid = ANY($1::text[])
-       ORDER BY firebase_uid
-       FOR UPDATE`,
-      [players]
-    );
-
-    if (wallets.rowCount !== 2) {
-      throw new Error("Não foi possível localizar as carteiras.");
-    }
-
-    await client.query(
-      `UPDATE public.wallet_accounts
-       SET balance = balance + $1,
-           updated_at = NOW()
-       WHERE firebase_uid = $2`,
-      [payout, winnerUid]
-    );
-
-    await client.query(
-      `INSERT INTO public.bet_transactions
-       (bet_id, firebase_uid, type, amount, idempotency_key)
-       VALUES ($1, $2, 'winner_payout', $3, $4)`,
-      [
-        betId,
-        winnerUid,
-        payout,
-        `bet:${betId}:payout:${winnerUid}`
-      ]
-    );
-
-    await client.query(
-      `INSERT INTO public.bet_transactions
-       (bet_id, firebase_uid, type, amount, idempotency_key)
-       VALUES ($1, $2, 'commission', $3, $4)`,
-      [
-        betId,
-        loserUid,
-        commission,
-        `bet:${betId}:commission`
-      ]
-    );
-
-    await client.query(
-      `INSERT INTO public.wallet_transactions
-       (firebase_uid, type, amount, description)
-       VALUES ($1, $2, $3, $4)`,
-      [
-        winnerUid,
-        "bet_payout",
-        payout,
-        `Prêmio da aposta ${betId}, já descontada a comissão`
-      ]
-    );
-
-    await client.query(
-      `UPDATE public.bets
-       SET status = 'finished',
-           winner_uid = $1,
-           settled_at = NOW()
-       WHERE id = $2`,
-      [winnerUid, betId]
-    );
-
-    await client.query("COMMIT");
-
-    room.bet.status = "finished";
-
-    console.log(
-      `[Aposta] ${betId}: vencedor recebeu ${payout.toFixed(2)} créditos.`
-    );
-
-    return {
-      winnerUid,
-      loserUid,
-      payout,
-      commission
-    };
-
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-
-  } finally {
-    client.release();
-  }
-}
-async function finishGame(room, winner, message) {
-  room.gameOver = true;
-  room.winner = winner;
-  room.mustContinue = null;
-
-  removeCapturedPieces(room);
-
-  let betResult = null;
-
-  try {
-    betResult = await settleBet(room, winner);
-
-    // Atualiza o saldo dos dois jogadores.
-    if (betResult) {
-      for (const uid of [betResult.winnerUid, betResult.loserUid]) {
-        const balance = await getWalletBalance(uid);
-        const socketIds = userSockets.get(uid) || new Set();
-
-        for (const socketId of socketIds) {
-          io.to(socketId).emit("wallet:response", {
-            success: true,
-            balance
-          });
-        }
-      }
-
-      message += ` Prêmio recebido: ${betResult.payout.toFixed(2)} créditos.`;
-    }
-  } catch (error) {
-    console.error("[Aposta] Erro ao pagar vencedor:", error);
-
-    io.to(room.code).emit("bet:error", {
-      message: "A partida terminou, mas houve um erro ao processar o prêmio. Entre em contato com o suporte."
+async function publishSettlement(room, result) {
+  if (!result) return;
+  room.bet.status = result.status;
+  if (!room.closing) {
+    io.to(room.code).emit("bet:response", {
+      status: result.status,
+      message: result.payout
+        ? `Prêmio de ${result.payout} créditos pago ao vencedor.`
+        : "Aposta cancelada. Reservas foram estornadas."
     });
   }
 
-  const result = {
-    ...roomSnapshot(room),
-    winner,
-    gameOver: true,
-    message
-  };
+  await Promise.allSettled(result.uids.map(async uid => {
+    const balance = await getWalletBalance(uid);
+    for (const socketId of userSockets.get(uid) || []) {
+      io.to(socketId).emit("wallet:response", { success: true, balance });
+    }
+  }));
+}
 
+async function processSettlement(entry) {
+  if (entry.running) return;
+  entry.running = true;
+  try {
+    const { room, winnerUid } = entry;
+    await recordResolution(room.bet.id, winnerUid);
+    const result = await settle(room.bet.id);
+    settlementQueue.delete(room.bet.id);
+    await publishSettlement(room, result);
+  } catch (error) {
+    console.error("[Aposta] Liquidação pendente:", error.message);
+    if (!entry.room.closing) {
+      io.to(entry.room.code).emit("bet:error", {
+        message: "Créditos pendentes. O servidor tentará concluir a liquidação novamente."
+      });
+    }
+  } finally {
+    entry.running = false;
+  }
+}
+
+async function resolveBet(room, winner) {
+  if (!room.bet || !["pending", "reserved"].includes(room.bet.status)) return;
+  if (settlementQueue.has(room.bet.id)) return;
+  const entry = { room, winnerUid: winner ? room.playerUids[winner] : null };
+  settlementQueue.set(room.bet.id, entry);
+  await processSettlement(entry);
+}
+
+async function recoverBets() {
+  if (!process.env.DATABASE_URL) return;
+  let connection;
+  try {
+    connection = await pool.connect();
+    const { rows: [lock] } = await connection.query(
+      "SELECT pg_try_advisory_lock(751503818) AS acquired"
+    );
+    if (!lock.acquired) throw new Error("Outra instância controla as apostas neste banco.");
+
+    const { rows } = await connection.query(
+      "SELECT id FROM public.bets WHERE status IN ('pending', 'reserved') ORDER BY id"
+    );
+    for (const { id } of rows) await settle(id);
+
+    recoveryConnection = connection;
+    connection.on("error", error => {
+      bettingReady = false;
+      recoveryConnection = null;
+      connection.release(true);
+      console.error("[Aposta] Conexão de controle perdida:", error.message);
+      // A próxima instância reconcilia os registros antes de aceitar novas reservas.
+      shutdown("Conexão de controle");
+    });
+    bettingReady = true;
+  } catch (error) {
+    if (connection) connection.release(true);
+    console.error("[Aposta] Recuperação indisponível:", error.message);
+  }
+}
+
+const settlementTimer = setInterval(() => {
+  if (bettingReady) {
+    for (const entry of settlementQueue.values()) void processSettlement(entry);
+  } else if (!recoveryConnection && !recoveryAttempt) {
+    startRecovery();
+  }
+}, 5000);
+settlementTimer.unref();
+
+let recoveryAttempt = null;
+function startRecovery() {
+  recoveryAttempt = recoverBets().finally(() => { recoveryAttempt = null; });
+}
+
+async function finishGame(room, winner, message) {
+  room.gameOver = true;
+  room.winner = winner;
+
+  const result = { ...roomSnapshot(room), message };
   io.to(room.code).emit("boardUpdate", result);
   io.to(room.code).emit("gameOver", result);
+  await resolveBet(room, winner);
 }
- 
-async function checkGameEnd(room) {
-  if (countPieces(room, BLACK) === 0) {
-    await finishGame(room, WHITE, "As brancas venceram!");
-    return true;
-  }
-
-  if (countPieces(room, WHITE) === 0) {
-    await finishGame(room, BLACK, "As pretas venceram!");
-    return true;
-  }
-
-  if (!hasAnyLegalMove(room, room.turn)) {
-    const winner = otherColor(room.turn);
-
-    await finishGame(
-      room,
-      winner,
-      `${winner === BLACK ? "As pretas" : "As brancas"} venceram!`
-    );
-
-    return true;
-  }
-
-  return false;
-}
-  
-
-// ======================================================
-// JOGADAS
-// ======================================================
 
 function parseCoordinate(value) {
   if (!value || typeof value !== "object") return null;
@@ -1174,7 +758,7 @@ async function handleMoveAttempt(socket, payload) {
     return;
   }
 
-  if (!room.started || room.gameOver) {
+  if (!room.started || room.gameOver || room.closing || !room.players.black || !room.players.white) {
     emitMoveRejected(socket, "A partida não está ativa.");
     return;
   }
@@ -1225,86 +809,35 @@ async function handleMoveAttempt(socket, payload) {
     return;
   }
 
-  const movingPiece = room.board[from.r][from.c];
-
-  room.board[from.r][from.c] = null;
-  room.board[to.r][to.c] = movingPiece;
-
-  if (move.capture) {
-    room.capturedThisTurn.push({
-      r: move.capture.r,
-      c: move.capture.c
-    });
-
-    room.mustContinue = { r: to.r, c: to.c };
-
-    const nextCaptures = getCaptures(room, to.r, to.c);
-
-    if (nextCaptures.length > 0) {
-      room.lastMoveAt = Date.now();
-
-      broadcastBoard(
-        room,
-        "Continue capturando com a mesma peça."
-      );
-
-      return;
-    }
-  }
-
-  removeCapturedPieces(room);
-  promotePiece(movingPiece, to.r);
-
-  room.mustContinue = null;
-  room.turn = otherColor(room.turn);
+  const outcome = applyMove(room, from, move);
   room.lastMoveAt = Date.now();
 
-if (await checkGameEnd(room)) return;
+  if (outcome.winner || outcome.draw) {
+    const winner = outcome.winner || null;
+    const message = outcome.draw
+      ? "Empate por repetição de posição."
+      : winner === BLACK ? "As pretas venceram!" : "As brancas venceram!";
+    await finishGame(room, winner, message);
+    return;
+  }
 
-  broadcastBoard(room, "Jogada sincronizada.");
+  broadcastBoard(room, outcome.continuing
+    ? "Continue capturando com a mesma peça."
+    : "Jogada sincronizada.");
 }
 
 // ======================================================
 // SALAS E SAÍDA VOLUNTÁRIA
 // ======================================================
 
-function leaveCurrentRoom(socket, reason = "O jogador saiu da sala.") {
+function leaveCurrentRoom(socket) {
   const room = getSocketRoom(socket);
-
-  if (!room) {
+  if (room) {
+    socket.leave(room.code);
     socketRooms.delete(socket.id);
-    socket.emit("roomLeft", {
-      message: "Você não está em uma sala."
-    });
-    return;
+    closeRoom(room, "O adversário saiu. A partida foi encerrada.");
   }
-
-  const code = room.code;
-  const color = getPlayerColor(room, socket.id);
-
-  socket.leave(code);
-  socketRooms.delete(socket.id);
-
-  if (color) {
-    clearReconnectTimer(code, color);
-
-    room.players[color] = null;
-    room.playerUids[color] = null;
-  }
-
-  socket.emit("roomLeft", {
-    code,
-    message: "Você saiu da sala."
-  });
-
-  io.to(code).emit("playerLeft", {
-    code,
-    color,
-    message: reason
-  });
-
-  // Uma saída voluntária encerra esta sala.
-  deleteRoom(code);
+  socket.emit("roomLeft", { message: "Você saiu da sala." });
 }
 
 function createRoom(socket) {
@@ -1331,6 +864,7 @@ function createRoom(socket) {
     socket.data.uid
   );
 
+  room.nicknames.black = socket.data.nickname || null;
   rooms.set(code, room);
   socketRooms.set(socket.id, code);
   socket.join(code);
@@ -1375,7 +909,12 @@ function joinRoom(socket, payload) {
     return;
   }
 
-  if (room.started || room.players.white ||
+  if (room.playerUids.black === socket.data.uid) {
+    emitRoomError(socket, "Use outra conta para jogar como adversário.");
+    return;
+  }
+
+  if (!room.players.black || room.closing || room.gameOver || room.started || room.players.white ||
       room.playerUids.white) {
     emitRoomError(socket, "Esta sala já está cheia.");
     return;
@@ -1383,6 +922,7 @@ function joinRoom(socket, payload) {
 
   room.players.white = socket.id;
   room.playerUids.white = socket.data.uid;
+  room.nicknames.white = socket.data.nickname || null;
   room.started = true;
 
   socketRooms.set(socket.id, code);
@@ -1410,7 +950,7 @@ function resumeRoomForSocket(socket) {
   const uid = socket.data.uid;
 
   for (const room of rooms.values()) {
-    if (!room.started || room.gameOver) continue;
+    if (room.closing) continue;
 
     let color = null;
 
@@ -1437,8 +977,10 @@ function resumeRoomForSocket(socket) {
     }
 
     clearReconnectTimer(room.code, color);
-
     room.players[color] = socket.id;
+    if (room.players.black && (room.players.white || !room.started)) {
+      room.reconnectDeadline = null;
+    }
     socketRooms.set(socket.id, room.code);
     socket.join(room.code);
 
@@ -1479,7 +1021,7 @@ io.use(async (socket, next) => {
 
     if (typeof token !== "string" || !token.trim()) {
       return next(
-        new Error("Faça login com o Google para jogar online.")
+        new Error("Entre na sua conta para jogar online.")
       );
     }
 
@@ -1490,7 +1032,6 @@ io.use(async (socket, next) => {
     }
 
     socket.data.uid = decoded.uid;
-    socket.data.email = decoded.email || null;
 
     next();
   } catch (error) {
@@ -1503,8 +1044,60 @@ io.use(async (socket, next) => {
 // EVENTOS SOCKET.IO
 // ======================================================
 
+function publishProfile(uid, nickname) {
+  for (const socketId of userSockets.get(uid) || []) {
+    const socket = io.sockets.sockets.get(socketId);
+    if (!socket) continue;
+    socket.data.nickname = nickname;
+    socket.emit("profile:state", { nickname });
+  }
+
+  for (const room of rooms.values()) {
+    const color = room.playerUids.black === uid ? BLACK
+      : room.playerUids.white === uid ? WHITE : null;
+    if (color) {
+      room.nicknames[color] = nickname;
+      io.to(room.code).emit("profiles:update", { code: room.code, nicknames: { ...room.nicknames } });
+    }
+  }
+}
+
+const profileOperations = new Map();
+function enqueueProfile(uid, operation) {
+  const next = (profileOperations.get(uid) || Promise.resolve()).catch(() => {}).then(operation);
+  profileOperations.set(uid, next);
+  return next.finally(() => {
+    if (profileOperations.get(uid) === next) profileOperations.delete(uid);
+  });
+}
+
 io.on("connection", socket => {
   const uid = socket.data.uid;
+  socket.on("profile:update", async payload => {
+    let nickname;
+    try {
+      nickname = validateNickname(payload?.nickname);
+    } catch (error) {
+      socket.emit("profile:error", { message: error.message });
+      return;
+    }
+
+    try {
+      await enqueueProfile(uid, async () => {
+        await pool.query(
+          `INSERT INTO public.player_profiles (firebase_uid, nickname)
+           VALUES ($1, $2)
+           ON CONFLICT (firebase_uid) DO UPDATE SET nickname = EXCLUDED.nickname, updated_at = NOW()`,
+          [uid, nickname]
+        );
+        publishProfile(uid, nickname);
+      });
+      socket.emit("profile:saved", { nickname });
+    } catch (error) {
+      console.error("[Perfil] Erro ao salvar:", error.message);
+      socket.emit("profile:error", { message: "Não foi possível salvar o apelido. Tente novamente." });
+    }
+  });
   socket.on("wallet:request", async () => {
   try {
     const uid = socket.data.uid;
@@ -1539,6 +1132,15 @@ io.on("connection", socket => {
   }
 
   userSockets.get(uid).add(socket.id);
+  void enqueueProfile(uid, async () => {
+    const { rows: [profile] } = await pool.query(
+      "SELECT nickname FROM public.player_profiles WHERE firebase_uid = $1", [uid]
+    );
+    publishProfile(uid, profile?.nickname || null);
+  }).catch(error => {
+    console.error("[Perfil] Erro ao carregar:", error.message);
+    socket.emit("profile:error", { message: "Não foi possível carregar seu apelido." });
+  });
 
   console.log(`[Socket] Usuário conectado: ${uid}`);
 
@@ -1566,10 +1168,9 @@ socket.on("bet:create", async payload => {
       throw new Error("O adversário está desconectado.");
     }
 
-    const bet = await createBetRequest(
-      room,
-      socket.data.uid,
-      payload?.amount
+    if (!bettingReady) throw new Error("Apostas temporariamente indisponíveis.");
+    const bet = await enqueueRoom(room, () =>
+      createBetRequest(room, socket.data.uid, payload?.amount)
     );
 
     const betInfo = {
@@ -1579,7 +1180,8 @@ socket.on("bet:create", async payload => {
       message: "Seu adversário enviou um pedido de aposta."
     };
 
-    io.to(opponentSocketId).emit("bet:created", betInfo);
+    if (room.closing) return;
+    io.to(room.players[opponentColor]).emit("bet:created", betInfo);
 
     socket.emit("bet:sent", {
       id: bet.id,
@@ -1603,10 +1205,9 @@ socket.on("bet:respond", async payload => {
       throw new Error("Você não está em uma sala.");
     }
 
-    const result = await respondToBet(
-      room,
-      socket.data.uid,
-      payload?.accepted
+    if (!bettingReady) throw new Error("Apostas temporariamente indisponíveis.");
+    const result = await enqueueRoom(room, () =>
+      respondToBet(room, socket.data.uid, payload?.accepted)
     );
 
     io.to(room.code).emit("bet:response", result);
@@ -1620,7 +1221,9 @@ socket.on("bet:respond", async payload => {
   socket.on("joinRoom", payload => joinRoom(socket, payload));
 socket.on("moveAttempt", async payload => {
   try {
-    await handleMoveAttempt(socket, payload);
+    const room = getSocketRoom(socket);
+    if (room) await enqueueRoom(room, () => handleMoveAttempt(socket, payload));
+    else emitMoveRejected(socket, "Você não está em uma sala.");
   } catch (error) {
     console.error("[Jogada] Erro ao processar movimento:", error);
     socket.emit("moveRejected", {
@@ -1671,13 +1274,14 @@ socket.on("moveAttempt", async payload => {
       if (color && room.players[color] === socket.id) {
         room.players[color] = null;
 
+        scheduleReconnectExpiry(room, color);
         io.to(code).emit("playerDisconnected", {
+          reconnectDeadline: room.reconnectDeadline,
           message: "O jogador desconectou. Aguardando reconexão.",
           color,
           reason
         });
 
-        scheduleReconnectExpiry(room, color, socket.id);
 
         console.log(
           `[Sala] ${code}: ${color} desconectou; aguardando reconexão.`
@@ -1706,6 +1310,8 @@ socket.on("moveAttempt", async payload => {
 function shutdown(signal) {
   console.log(`\n[Servidor] Recebido ${signal}. Encerrando...`);
 
+  clearInterval(settlementTimer);
+  bettingReady = false;
   for (const timer of reconnectTimers.values()) {
     clearTimeout(timer);
   }
@@ -1740,13 +1346,15 @@ process.on("uncaughtException", error => {
 // INICIAR
 // ======================================================
 
-httpServer.listen(PORT, "0.0.0.0", () => {
+startRecovery();
+
+httpServer.listen(PORT, HOST, () => {
   console.log("========================================");
   console.log("       DAMAS ONLINE — SERVIDOR");
   console.log("========================================");
   console.log(`Porta: ${PORT}`);
   console.log(`Firebase: ${firebaseReady ? "pronto" : "não configurado"}`);
   console.log(`Saúde: http://localhost:${PORT}/health`);
-  console.log("Reconexão: 120 segundos");
+  console.log(`Reconexão: ${RECONNECT_GRACE_MS / 1000} segundos`);
   console.log("========================================");
 });
