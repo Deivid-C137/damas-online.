@@ -52,6 +52,8 @@ const betStatusElement = $("bet-status");
   let socket = null;
   let getFirebaseToken = null;
   let onlineBet = null;
+  let onlineResult = null;
+  let roomExitAction = null;
   let nicknames = { black: null, white: null };
   let opponentConnected = false;
   let submittedNickname = null;
@@ -249,9 +251,12 @@ const betStatusElement = $("bet-status");
       ? document.activeElement.dataset
       : null;
     boardElement.innerHTML = "";
+    const flipped = onlinePlayerColor === BLACK;
 
-    for (let r = 0; r < SIZE; r++) {
-      for (let c = 0; c < SIZE; c++) {
+    for (let row = 0; row < SIZE; row++) {
+      const r = flipped ? SIZE - 1 - row : row;
+      for (let column = 0; column < SIZE; column++) {
+        const c = flipped ? SIZE - 1 - column : column;
         const cell = document.createElement("button");
 
         cell.type = "button";
@@ -359,6 +364,12 @@ const betStatusElement = $("bet-status");
 
   function updateTurnBanner(message = null, state = null) {
     if (!turnBannerElement) return;
+    turnBannerElement.hidden = Boolean(onlineRoomCode && (gameOver ||
+      (onlineGameActive && opponentConnected && !mustContinue)));
+    const announcement = $("arena-turn-announcement");
+    const turnText = turnBannerElement.hidden && !gameOver
+      ? (turn === onlinePlayerColor ? "Sua vez" : "Vez do adversário") : "";
+    if (announcement.textContent !== turnText) announcement.textContent = turnText;
 
     turnBannerElement.classList.remove(
       "waiting", "my-turn", "your-turn",
@@ -406,36 +417,59 @@ const betStatusElement = $("bet-status");
   }
 
   function updatePlayerCards() {
-    function playerLabel(color, fallback) {
-      const name = nicknames[color] || fallback;
-      return onlinePlayerColor === color ? `${name} (você)` : name;
+    const blackIsSelf = onlinePlayerColor === BLACK;
+    const upper = blackIsSelf ? whiteCardElement : blackCardElement;
+    const lower = blackIsSelf ? blackCardElement : whiteCardElement;
+    if (upper.parentElement.id !== "upper-player") {
+      $("upper-player").append(upper);
+      $("lower-player").append(lower);
     }
 
-    if (blackPlayerElement) {
-      blackPlayerElement.textContent = onlineRoomCode
-        ? playerLabel(BLACK, "Jogador das pretas")
+    for (const [color, card, label] of [
+      [BLACK, blackCardElement, blackPlayerElement],
+      [WHITE, whiteCardElement, whitePlayerElement]
+    ]) {
+      const isSelf = color === onlinePlayerColor;
+      const active = !gameOver && turn === color &&
+        (!onlineRoomCode || (onlineGameActive && opponentConnected));
+      const badge = card.querySelector(".player-tag");
+      const fallback = color === WHITE ? "Jogador das brancas" : "Jogador das pretas";
+      label.textContent = onlineRoomCode
+        ? `${nicknames[color] || (isSelf || opponentConnected ? fallback : "Aguardando jogador")}${isSelf ? " (você)" : ""}`
         : "Partida local";
+      card.classList.toggle("active-turn", active);
+      badge.hidden = !onlineRoomCode || !active;
+      badge.textContent = isSelf ? "Sua vez" : "Vez do adversário";
+    }
+  }
+
+  function renderArenaSummary() {
+    const credits = value => `${balanceFormat.format(Number(value))} créditos`;
+    const reserved = onlineBet?.status === "reserved";
+    $("arena-bet").hidden = !onlineRoomCode || !reserved || Boolean(onlineResult);
+    if (reserved) {
+      $("arena-stake").textContent = credits(onlineBet.amount);
+      $("arena-prize").textContent = credits(onlineBet.prize);
     }
 
-    if (whitePlayerElement) {
-      whitePlayerElement.textContent = onlineRoomCode
-        ? playerLabel(WHITE, "Jogador das brancas")
-        : "Partida local";
-    }
-
-    if (blackCardElement) {
-      blackCardElement.classList.toggle(
-        "active-turn",
-        Boolean(!gameOver && (!onlineRoomCode || onlineGameActive) && turn === BLACK)
-      );
-    }
-
-    if (whiteCardElement) {
-      whiteCardElement.classList.toggle(
-        "active-turn",
-        Boolean(!gameOver && (!onlineRoomCode || onlineGameActive) && turn === WHITE)
-      );
-    }
+    $("arena-result").hidden = !onlineResult;
+    if (!onlineResult) return;
+    const { winner, reason } = onlineResult;
+    const color = winner === WHITE ? "Brancas" : "Pretas";
+    const nickname = nicknames[winner];
+    $("arena-result-title").textContent = winner
+      ? nickname ? `${nickname} venceu · ${color}` : `${color} venceram`
+      : "Empate";
+    $("arena-result-reason").textContent = reason;
+    const credit = $("arena-result-credit");
+    const payout = onlineBet?.payout;
+    const refund = onlineBet?.refund;
+    credit.hidden = payout == null && refund == null && !reserved;
+    credit.textContent = payout != null ? `Prêmio pago ao vencedor: ${credits(payout)}`
+      : refund != null ? `Estorno por jogador: ${credits(refund)}`
+      : reserved ? "Créditos reservados. Liquidação pendente." : "";
+    $("play-again").disabled = !socket?.connected || Boolean(roomExitAction);
+    $("return-lobby").disabled = !socket?.connected || Boolean(roomExitAction);
   }
 
   function messageOf(payload, fallback) {
@@ -459,6 +493,7 @@ const betStatusElement = $("bet-status");
   // ------------------ SOCKET.IO ------------------
 
   function renderBet() {
+    renderArenaSummary();
     const pending = onlineBet?.status === "pending";
     const canRespond = pending && onlineBet.responderColor === onlinePlayerColor;
     const ready = Boolean(bettingAvailable && socket?.connected && onlineGameActive && opponentConnected && !gameOver);
@@ -529,6 +564,8 @@ const betStatusElement = $("bet-status");
     onlineGameActive = false;
     opponentConnected = false;
     onlineBet = null;
+    onlineResult = null;
+    roomExitAction = null;
     nicknames = { black: null, white: null };
     roomCodeInput.value = "";
     $("offline-notice").hidden = true;
@@ -563,6 +600,7 @@ const betStatusElement = $("bet-status");
     mustContinue = payload.mustContinue || null;
     capturedThisTurn = Array.isArray(payload.capturedThisTurn) ? payload.capturedThisTurn : [];
     gameOver = Boolean(payload.gameOver);
+    onlineResult = gameOver ? { winner: payload.winner, reason: payload.resultReason || payload.message || "" } : null;
     movePending = false;
     onlineGameActive = Boolean(payload.started) && !gameOver;
     opponentConnected = Boolean(payload.players?.[onlinePlayerColor === WHITE ? BLACK : WHITE]);
@@ -574,7 +612,7 @@ const betStatusElement = $("bet-status");
     legalMoves = selectedPiece ? legalMovesFor(selectedPiece.row, selectedPiece.col) : [];
 
     $("offline-notice").hidden = true;
-    $("leave-room").hidden = false;
+    $("leave-room").hidden = gameOver;
     $("leave-room").textContent = onlineGameActive ? "Desistir" : "Sair da sala";
     renderBoard();
     updatePlayerCards();
@@ -746,12 +784,18 @@ function registerSocketEvents() {
   socket.on("roomStateUnavailable", payload => {
     if (onlineRoomCode) clearOnlineRoom(messageOf(payload, "A partida foi encerrada."));
   });
-  socket.on("roomLeft", payload => clearOnlineRoom(payload.message));
+  socket.on("roomLeft", payload => {
+    const action = roomExitAction;
+    clearOnlineRoom(payload.message);
+    if (action === "new-room" && socket?.connected) createRoomButton.click();
+    else if (action === "lobby") createRoomButton.focus();
+  });
   socket.on("playerLeft", payload => clearOnlineRoom(payload.message));
   socket.on("playerDisconnected", payload => {
     if (payload.code !== onlineRoomCode) return;
     movePending = false;
     opponentConnected = false;
+    updatePlayerCards();
     if (gameOver) return;
     setRoomInfo(payload.message);
     if (onlineGameActive) showOpponentAlert(payload.reconnectDeadline, payload.serverTime);
@@ -770,6 +814,7 @@ function registerSocketEvents() {
   socket.on("disconnect", reason => {
     cancelConnectionTimers();
     sessionReplaced = reason === "io server disconnect";
+    roomExitAction = null;
     scheduleConnectionAttempt();
     hideOpponentAlert();
     bettingAvailable = false;
@@ -777,6 +822,7 @@ function registerSocketEvents() {
     onlineGameActive = false;
     movePending = false;
     $("profile-save").disabled = true;
+    updatePlayerCards();
     renderBet();
     if (!onlineRoomCode) return;
     $("offline-status").textContent = sessionReplaced
@@ -863,7 +909,7 @@ function registerSocketEvents() {
 
     socket.on("bet:response", data => {
       if (!onlineBet || onlineBet.id !== data.id || data.code !== onlineRoomCode) return;
-      onlineBet.status = data.status;
+      onlineBet = { ...onlineBet, ...data };
       renderBet();
       betStatusElement.textContent = data.message;
     });
@@ -881,6 +927,14 @@ function registerSocketEvents() {
 function registerRoomControls() {
   if (roomControlsRegistered) return;
   roomControlsRegistered = true;
+  function exitResult(action) {
+    if (!socket?.connected || !onlineResult || roomExitAction) return;
+    roomExitAction = action;
+    renderArenaSummary();
+    socket.emit("leaveRoom");
+  }
+  $("play-again").addEventListener("click", () => exitResult("new-room"));
+  $("return-lobby").addEventListener("click", () => exitResult("lobby"));
   $("leave-room").addEventListener("click", () => {
     if (socket?.connected) socket.emit(onlineGameActive ? "resignGame" : "leaveRoom");
   });

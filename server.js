@@ -6,7 +6,7 @@ const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
 const { Pool } = require("pg");
-const { createSettlement } = require("./settlement");
+const { createSettlement, quoteBet } = require("./settlement");
 const { validateNickname } = require("./nicknames");
 
 const { Server } = require("socket.io");
@@ -274,6 +274,18 @@ function emitMoveRejected(socket, message) {
   socket.emit("moveRejected", { message });
 }
 
+function betSnapshot(room) {
+  if (!room.bet) return null;
+  const { id, amount, status, opponentUid, payout, refund } = room.bet;
+  return {
+    id, amount, status,
+    prize: quoteBet(amount).prize,
+    payout: payout ?? null,
+    refund: refund ?? null,
+    responderColor: room.playerUids.black === opponentUid ? BLACK : WHITE
+  };
+}
+
 function roomSnapshot(room) {
   return {
     code: room.code,
@@ -285,14 +297,10 @@ function roomSnapshot(room) {
     capturedThisTurn: room.capturedThisTurn.map(pos => ({ ...pos })),
     gameOver: room.gameOver,
     winner: room.winner,
+    resultReason: room.resultReason,
     ...(room.resultMessage && { message: room.resultMessage }),
     started: room.started,
-    bet: room.bet ? {
-      id: room.bet.id,
-      amount: room.bet.amount,
-      status: room.bet.status,
-      responderColor: room.playerUids.black === room.bet.opponentUid ? BLACK : WHITE
-    } : null,
+    bet: betSnapshot(room),
     reconnectGraceMs: RECONNECT_GRACE_MS,
     reconnectDeadlines: { ...room.reconnectDeadlines },
     serverTime: Date.now(),
@@ -323,6 +331,7 @@ function createRoomState(code, socketId, uid) {
     gameOver: false,
     winner: null,
     resultMessage: null,
+    resultReason: null,
     started: false,
     bet: null,
 
@@ -373,7 +382,7 @@ function expireReconnects(room, now = Date.now()) {
 
   const connected = colors.filter(color => room.players[color]);
   if (room.started && !room.gameOver && connected.length === 1) {
-    endByAbandonment(room, connected[0], "O adversário não voltou a tempo.");
+    endByAbandonment(room, connected[0], "expired");
     return;
   }
 
@@ -665,14 +674,15 @@ let recoveryConnection = null;
 async function publishSettlement(room, result) {
   if (!result) return;
   room.bet.status = result.status;
+  room.bet.payout = result.payout;
+  room.bet.refund = result.refund;
   if (!room.closing) {
     io.to(room.code).emit("bet:response", {
-      id: room.bet.id,
+      ...betSnapshot(room),
       code: room.code,
-      status: result.status,
       message: result.payout
         ? `Prêmio de ${result.payout} créditos pago ao vencedor.`
-        : "Aposta cancelada. Reservas foram estornadas."
+        : result.refund ? "Os créditos reservados foram estornados." : "Aposta cancelada."
     });
   }
 
@@ -767,11 +777,12 @@ function startRecovery() {
   recoveryAttempt = recoverBets().finally(() => { recoveryAttempt = null; });
 }
 
-function announceGameResult(room, winner, message) {
+function announceGameResult(room, winner, message, reason) {
   if (room.closing || room.gameOver) return false;
   room.gameOver = true;
   room.winner = winner;
   room.resultMessage = message;
+  room.resultReason = reason;
   room.mustContinue = null;
   for (const { r, c } of room.capturedThisTurn) room.board[r][c] = null;
   room.capturedThisTurn = [];
@@ -786,13 +797,15 @@ function announceGameResult(room, winner, message) {
   return true;
 }
 
-async function finishGame(room, winner, message) {
-  if (announceGameResult(room, winner, message)) await resolveBet(room, winner);
+async function finishGame(room, winner, message, reason) {
+  if (announceGameResult(room, winner, message, reason)) await resolveBet(room, winner);
 }
 
-function endByAbandonment(room, winner, reason) {
+function endByAbandonment(room, winner, cause) {
   const side = winner === WHITE ? "As brancas" : "As pretas";
-  if (!announceGameResult(room, winner, `${side} venceram por abandono. ${reason}`)) return;
+  const losingSide = winner === WHITE ? "As pretas" : "As brancas";
+  const reason = cause === "resigned" ? `${losingSide} desistiram.` : `${losingSide} não voltaram a tempo.`;
+  if (!announceGameResult(room, winner, `${side} venceram por abandono. ${reason}`, reason)) return;
 
   for (const color of [BLACK, WHITE]) {
     const uid = room.playerUids[color];
@@ -883,7 +896,12 @@ async function handleMoveAttempt(socket, payload) {
     const message = outcome.draw
       ? "Empate por repetição de posição."
       : winner === BLACK ? "As pretas venceram!" : "As brancas venceram!";
-    await finishGame(room, winner, message);
+    const losingColor = winner === WHITE ? BLACK : WHITE;
+    const reason = outcome.draw ? "Repetição de posição."
+      : room.board.some(row => row.some(piece => piece?.color === losingColor))
+        ? `As ${losingColor === WHITE ? "brancas" : "pretas"} ficaram sem jogadas legais.`
+        : `Todas as peças ${losingColor === WHITE ? "brancas" : "pretas"} foram capturadas.`;
+    await finishGame(room, winner, message, reason);
     return;
   }
 
@@ -919,7 +937,7 @@ function resignGame(socket) {
 
   expireReconnects(room);
   if (room.gameOver || room.closing) return;
-  endByAbandonment(room, color === WHITE ? BLACK : WHITE, "Um jogador desistiu.");
+  endByAbandonment(room, color === WHITE ? BLACK : WHITE, "resigned");
 }
 
 function createRoom(socket) {
@@ -1278,7 +1296,7 @@ socket.on("bet:respond", async payload => {
       respondToBet(room, socket.data.uid, payload?.accepted, payload?.betId)
     );
 
-    io.to(room.code).emit("bet:response", { ...result, code: room.code, id: payload.betId });
+    io.to(room.code).emit("bet:response", { ...result, ...betSnapshot(room), code: room.code });
     if (result.accepted) notifyWallets(Object.values(room.playerUids));
 
   } catch (error) {

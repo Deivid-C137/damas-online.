@@ -1,5 +1,11 @@
 "use strict";
 
+function quoteBet(amount) {
+  const stakeCents = Math.round(Number(amount) * 100);
+  const commissionCents = Math.round(stakeCents / 10);
+  return { commissionCents, prize: ((stakeCents * 2 - commissionCents) / 100).toFixed(2) };
+}
+
 function createSettlement(pool) {
   async function recordResolution(id, winnerUid) {
     await pool.query(
@@ -18,9 +24,22 @@ function createSettlement(pool) {
       const { rows: [bet] } = await client.query(
         "SELECT * FROM public.bets WHERE id = $1 FOR UPDATE", [id]
       );
-      if (!bet || !["pending", "reserved"].includes(bet.status)) {
+      if (!bet) {
         await client.query("COMMIT");
-        return bet ? { status: bet.status, uids: [] } : null;
+        return null;
+      }
+      if (!["pending", "reserved"].includes(bet.status)) {
+        const journal = await client.query(
+          "SELECT type, amount FROM public.bet_transactions WHERE bet_id = $1 AND type IN ('winner_payout', 'stake_refunded')",
+          [id]
+        );
+        await client.query("COMMIT");
+        return {
+          status: bet.status,
+          payout: journal.rows.find(row => row.type === "winner_payout")?.amount ?? null,
+          refund: journal.rows.find(row => row.type === "stake_refunded")?.amount ?? null,
+          uids: journal.rowCount ? [bet.creator_uid, bet.opponent_uid] : []
+        };
       }
 
       const uids = [bet.creator_uid, bet.opponent_uid].sort();
@@ -30,6 +49,7 @@ function createSettlement(pool) {
       }
 
       let payout = null;
+      let refund = null;
       if (bet.status === "reserved") {
         const wallets = await client.query(
           `SELECT firebase_uid FROM public.wallet_accounts
@@ -38,17 +58,17 @@ function createSettlement(pool) {
         if (wallets.rowCount !== 2) throw new Error("Carteiras da aposta não encontradas.");
 
         if (winner) {
-          const stakeCents = Math.round(Number(bet.amount) * 100);
-          const commission = Math.round(stakeCents / 10);
-          payout = ((stakeCents * 2 - commission) / 100).toFixed(2);
+          const { commissionCents, prize } = quoteBet(bet.amount);
+          payout = prize;
           await credit(client, bet.id, winner, "winner_payout", "bet_payout", payout);
           const loser = uids.find(uid => uid !== winner);
           await recordBetTransaction(client, bet.id, loser, "commission",
-            (commission / 100).toFixed(2), `bet:${bet.id}:commission`);
+            (commissionCents / 100).toFixed(2), `bet:${bet.id}:commission`);
         } else {
           for (const uid of uids) {
             await credit(client, bet.id, uid, "stake_refunded", "stake_refunded", bet.amount);
           }
+          refund = bet.amount;
         }
       }
 
@@ -59,7 +79,7 @@ function createSettlement(pool) {
          WHERE id = $1`, [id, status, payout ? winner : null]
       );
       await client.query("COMMIT");
-      return { status, payout, uids };
+      return { status, payout, refund, uids };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -90,4 +110,4 @@ function createSettlement(pool) {
   return { recordResolution, settle };
 }
 
-module.exports = { createSettlement };
+module.exports = { createSettlement, quoteBet };
