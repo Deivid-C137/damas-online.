@@ -290,7 +290,7 @@ function roomSnapshot(room) {
       status: room.bet.status,
       responderColor: room.playerUids.black === room.bet.opponentUid ? BLACK : WHITE
     } : null,
-    reconnectDeadline: room.reconnectDeadline,
+    reconnectGraceMs: RECONNECT_GRACE_MS,
     nicknames: { ...room.nicknames },
     players: {
       black: Boolean(room.players.black),
@@ -324,7 +324,7 @@ bet: null,
 
     operations: Promise.resolve(),
     closing: false,
-    reconnectDeadline: null,
+    reconnectDeadlines: { black: null, white: null },
     createdAt: Date.now(),
     lastMoveAt: null
   };
@@ -347,13 +347,13 @@ function clearReconnectTimer(code, color) {
 function scheduleReconnectExpiry(room, color) {
   const key = `${room.code}:${color}`;
   clearReconnectTimer(room.code, color);
-  room.reconnectDeadline ??= Date.now() + RECONNECT_GRACE_MS;
+  room.reconnectDeadlines[color] ??= Date.now() + RECONNECT_GRACE_MS;
   const timer = setTimeout(() => {
     reconnectTimers.delete(key);
     if (room.players[color] === null) {
       closeRoom(room, "O prazo para reconexão terminou. A partida foi encerrada.");
     }
-  }, room.reconnectDeadline - Date.now());
+  }, room.reconnectDeadlines[color] - Date.now());
   timer.unref();
   reconnectTimers.set(key, timer);
 }
@@ -447,7 +447,7 @@ async function createBetRequest(room, creatorUid, amount) {
     throw new Error("Os dois jogadores precisam estar na sala.");
   }
 
-  if (room.bet) {
+  if (room.bet && room.bet.status !== "cancelled") {
     throw new Error("Esta partida já possui uma aposta.");
   }
 
@@ -502,7 +502,7 @@ async function createBetRequest(room, creatorUid, amount) {
 // RESPONDER AO PEDIDO DE APOSTA
 // ======================================================
 
-async function respondToBet(room, opponentUid, accepted) {
+async function respondToBet(room, opponentUid, accepted, betId) {
   const client = await pool.connect();
 
   try {
@@ -512,6 +512,8 @@ async function respondToBet(room, opponentUid, accepted) {
         !room.bet || room.bet.status !== "pending") {
       throw new Error("Não existe uma aposta pendente.");
     }
+
+    if (room.bet.id !== betId) throw new Error("Este pedido de aposta não está mais ativo.");
 
     if (room.bet.opponentUid !== opponentUid) {
       throw new Error("Somente o adversário pode responder à aposta.");
@@ -643,6 +645,8 @@ async function publishSettlement(room, result) {
   room.bet.status = result.status;
   if (!room.closing) {
     io.to(room.code).emit("bet:response", {
+      id: room.bet.id,
+      code: room.code,
       status: result.status,
       message: result.payout
         ? `Prêmio de ${result.payout} créditos pago ao vencedor.`
@@ -650,12 +654,21 @@ async function publishSettlement(room, result) {
     });
   }
 
-  await Promise.allSettled(result.uids.map(async uid => {
-    const balance = await getWalletBalance(uid);
+  notifyWallets(result.uids);
+}
+
+function notifyWallets(uids) {
+  for (const uid of uids) {
     for (const socketId of userSockets.get(uid) || []) {
-      io.to(socketId).emit("wallet:response", { success: true, balance });
+      io.to(socketId).emit("wallet:changed");
     }
-  }));
+  }
+}
+
+function setBettingReady(ready) {
+  if (bettingReady === ready) return;
+  bettingReady = ready;
+  io.emit("bet:availability", { ready });
 }
 
 async function processSettlement(entry) {
@@ -704,14 +717,14 @@ async function recoverBets() {
 
     recoveryConnection = connection;
     connection.on("error", error => {
-      bettingReady = false;
+      setBettingReady(false);
       recoveryConnection = null;
       connection.release(true);
       console.error("[Aposta] Conexão de controle perdida:", error.message);
       // A próxima instância reconcilia os registros antes de aceitar novas reservas.
       shutdown("Conexão de controle");
     });
-    bettingReady = true;
+    setBettingReady(true);
   } catch (error) {
     if (connection) connection.release(true);
     console.error("[Aposta] Recuperação indisponível:", error.message);
@@ -961,6 +974,11 @@ function resumeRoomForSocket(socket) {
     }
 
     if (!color) continue;
+    const deadline = room.reconnectDeadlines[color];
+    if (deadline && Date.now() >= deadline) {
+      closeRoom(room, "O prazo para reconexão terminou. A partida foi encerrada.");
+      continue;
+    }
 
     const previousSocketId = room.players[color];
 
@@ -978,9 +996,7 @@ function resumeRoomForSocket(socket) {
 
     clearReconnectTimer(room.code, color);
     room.players[color] = socket.id;
-    if (room.players.black && (room.players.white || !room.started)) {
-      room.reconnectDeadline = null;
-    }
+    room.reconnectDeadlines[color] = null;
     socketRooms.set(socket.id, room.code);
     socket.join(room.code);
 
@@ -990,8 +1006,8 @@ function resumeRoomForSocket(socket) {
       message: "Partida recuperada com sucesso."
     });
 
-    io.to(room.code).emit("playerReconnected", {
-      color,
+    socket.to(room.code).emit("playerReconnected", {
+      ...roomSnapshot(room),
       message: "O adversário voltou à partida."
     });
 
@@ -1098,34 +1114,17 @@ io.on("connection", socket => {
       socket.emit("profile:error", { message: "Não foi possível salvar o apelido. Tente novamente." });
     }
   });
-  socket.on("wallet:request", async () => {
-  try {
-    const uid = socket.data.uid;
-
-    if (!uid) {
-      socket.emit("wallet:response", {
-        success: false,
-        message: "Faça login para acessar sua carteira."
-      });
-      return;
+  socket.on("wallet:request", async acknowledge => {
+    const reply = typeof acknowledge === "function" ? acknowledge
+      : payload => socket.emit("wallet:response", payload);
+    try {
+      const balance = await getOrCreateWallet(uid);
+      reply({ success: true, balance: Number(balance) });
+    } catch (error) {
+      console.error("[Carteira] Erro ao consultar saldo:", error.code || error.name);
+      reply({ success: false, retryable: true });
     }
-
-    const balance = await getOrCreateWallet(uid);
-
-    socket.emit("wallet:response", {
-      success: true,
-      balance: Number(balance)
-    });
-
-  } catch (error) {
-    console.error("[Carteira] Erro ao consultar saldo:", error);
-
-    socket.emit("wallet:response", {
-      success: false,
-      message: "Não foi possível carregar sua carteira."
-    });
-  }
-});
+  });
 
   if (!userSockets.has(uid)) {
     userSockets.set(uid, new Set());
@@ -1144,6 +1143,7 @@ io.on("connection", socket => {
 
   console.log(`[Socket] Usuário conectado: ${uid}`);
 
+  socket.emit("bet:availability", { ready: bettingReady });
   socket.emit("serverReady", {
     message: "Conectado ao servidor de damas."
   });
@@ -1174,6 +1174,7 @@ socket.on("bet:create", async payload => {
     );
 
     const betInfo = {
+      code: room.code,
       id: bet.id,
       amount: bet.amount,
       status: bet.status,
@@ -1181,9 +1182,10 @@ socket.on("bet:create", async payload => {
     };
 
     if (room.closing) return;
-    io.to(room.players[opponentColor]).emit("bet:created", betInfo);
+    if (room.players[opponentColor]) io.to(room.players[opponentColor]).emit("bet:created", betInfo);
 
     socket.emit("bet:sent", {
+      code: room.code,
       id: bet.id,
       amount: bet.amount,
       status: bet.status,
@@ -1207,10 +1209,11 @@ socket.on("bet:respond", async payload => {
 
     if (!bettingReady) throw new Error("Apostas temporariamente indisponíveis.");
     const result = await enqueueRoom(room, () =>
-      respondToBet(room, socket.data.uid, payload?.accepted)
+      respondToBet(room, socket.data.uid, payload?.accepted, payload?.betId)
     );
 
-    io.to(room.code).emit("bet:response", result);
+    io.to(room.code).emit("bet:response", { ...result, code: room.code, id: payload.betId });
+    if (result.accepted) notifyWallets(Object.values(room.playerUids));
 
   } catch (error) {
     socket.emit("bet:error", {
@@ -1259,7 +1262,9 @@ socket.on("moveAttempt", async payload => {
   });
 
   // Recupera a partida após registrar os listeners do servidor.
-  resumeRoomForSocket(socket);
+  if (!resumeRoomForSocket(socket)) {
+    socket.emit("roomStateUnavailable", { message: "Você não está em uma sala." });
+  }
 
   socket.on("disconnect", reason => {
     const room = getSocketRoom(socket);
@@ -1276,7 +1281,7 @@ socket.on("moveAttempt", async payload => {
 
         scheduleReconnectExpiry(room, color);
         io.to(code).emit("playerDisconnected", {
-          reconnectDeadline: room.reconnectDeadline,
+          reconnectDeadline: room.reconnectDeadlines[color],
           message: "O jogador desconectou. Aguardando reconexão.",
           color,
           reason

@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const { once } = require("node:events");
+const http = require("node:http");
 const { setTimeout: delay } = require("node:timers/promises");
 const { chromium } = require("playwright");
 const { Pool } = require("pg");
@@ -26,7 +27,7 @@ let browser;
 const pool = new Pool({ connectionString: database, ssl: false });
 
 async function eventually(check, timeout = 12000) {
-  const deadline = Date.now() + timeout;
+  const deadline = performance.now() + timeout;
   let error;
   do {
     try {
@@ -35,8 +36,28 @@ async function eventually(check, timeout = 12000) {
       error = caught;
       await delay(120);
     }
-  } while (Date.now() < deadline);
+  } while (performance.now() < deadline);
   throw error;
+}
+
+function readHealth() {
+  return new Promise((resolve, reject) => {
+    const request = http.get(`${origin}/health`, { agent: false, timeout: 1000 }, response => {
+      const chunks = [];
+      response.on("data", chunk => chunks.push(chunk));
+      response.on("error", reject);
+      response.on("end", () => {
+        try {
+          assert.equal(response.statusCode, 200);
+          resolve(JSON.parse(Buffer.concat(chunks)));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("Sem resposta da rota de saúde.")));
+    request.on("error", reject);
+  });
 }
 
 async function startServer() {
@@ -47,11 +68,10 @@ async function startServer() {
   });
   await eventually(async () => {
     assert.equal(server.exitCode, null);
-    const response = await fetch(`${origin}/health`);
-    const health = await response.json();
+    const health = await readHealth();
     assert.equal(health.firebaseReady, true);
     assert.equal(health.bettingReady, true);
-  });
+  }, 30000);
 }
 
 async function stopServer() {
@@ -65,7 +85,7 @@ async function waitText(locator, text) {
   await eventually(async () => assert.match(await locator.textContent({ timeout: 500 }), text));
 }
 
-async function account(index) {
+async function account(index, waitForBalance = true) {
   const context = await browser.newContext();
   await context.route("**/*", route => {
     const url = new URL(route.request().url());
@@ -81,7 +101,7 @@ async function account(index) {
   await page.locator("#auth-email").fill(email);
   await page.locator("#auth-password").fill("Senha-local-730");
   await page.locator("#auth-submit").click();
-  await waitText(page.locator("#wallet-balance"), /500/);
+  if (waitForBalance) await waitText(page.locator("#wallet-balance"), /500/);
   return { page, context, email, incoming };
 }
 
@@ -201,8 +221,36 @@ async function main() {
   await waitText(guest.locator("#turn-title"), /VEZ DAS PRETAS/);
   await guest.close();
 
-  const [black, white] = await Promise.all([account(1), account(2)]);
+  const walletBlocker = await pool.connect();
+  let black;
+  try {
+    await walletBlocker.query("BEGIN");
+    await walletBlocker.query("LOCK TABLE public.wallet_accounts IN ACCESS EXCLUSIVE MODE");
+    black = await account(1, false);
+    await waitText(black.page.locator("#wallet-message"), /Carregando saldo/);
+    await waitText(black.page.locator("#wallet-message"), /Saldo temporariamente indisponível.*Tentando/);
+    assert.equal(await black.page.locator("#wallet-balance").innerText(), "—");
+  } finally {
+    await walletBlocker.query("ROLLBACK");
+    walletBlocker.release();
+  }
+  await waitText(black.page.locator("#wallet-balance"), /^500,00$/);
+
+  const session = await fetch(`http://${emulator}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=demo-damas-key`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: black.email, password: "Senha-local-730", returnSecureToken: true })
+  });
+  assert.equal(session.status, 200);
+  const { localId: uid } = await session.json();
+  assert.ok(uid);
+  await pool.query("UPDATE public.wallet_accounts SET balance = 0 WHERE firebase_uid = $1", [uid]);
+  await black.page.locator("#refresh-wallet").click();
+  await waitText(black.page.locator("#wallet-balance"), /^0,00$/);
+  await pool.query("UPDATE public.wallet_accounts SET balance = 500 WHERE firebase_uid = $1", [uid]);
+  const white = await account(2);
   await loginAgain(black);
+  console.log("OK: saldo indisponível, recuperação automática e exibição de saldo zero.");
   for (const { page, email } of [black, white]) {
     assert.equal(await page.locator("#login-email").innerText(), email);
     assert.equal(await page.locator("#login-status").innerText(), "Conectado como Jogador");
@@ -227,6 +275,9 @@ async function main() {
   }
   console.log("OK: moderação, edição pública e e-mail restrito ao perfil privado.");
 
+  await propose(black.page, white.page);
+  await white.page.locator("#bet-decline").click();
+  await waitText(black.page.locator("#bet-status"), /refusada|recusada/);
   await propose(black.page, white.page);
   await white.page.reload();
   await eventually(async () => assert.equal(await white.page.locator("#profile-nickname").inputValue(), "Dama da Serra"));
