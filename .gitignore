@@ -2,3 +2,6 @@ node_modules/
 .env
 
 firebase-service-account.json
+.env.local
+.env.e2e
+firebase-debug.log

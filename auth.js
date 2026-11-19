@@ -1,19 +1,3 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
-
-import {
-  getAuth,
-  GoogleAuthProvider,
-  signInWithPopup,
-  onAuthStateChanged,
-  signOut,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  sendPasswordResetEmail,
-  setPersistence,
-  browserLocalPersistence,
-  browserSessionPersistence
-} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
-
 // Configuração do Firebase já utilizada pelo Damas Online
 const firebaseConfig = {
   apiKey: "AIzaSyArMuHtTim7TnqgKHqsl181P57YlaeZJRI",
@@ -25,22 +9,41 @@ const firebaseConfig = {
   measurementId: "G-3HH65R2207"
 };
 
-const app = initializeApp(firebaseConfig);
+const localConfig = await fetch("/auth-config", { cache: "no-store" }).then(response => {
+  if (!response.ok) throw new Error("Configuração de autenticação indisponível.");
+  return response.json();
+});
+const appSdk = localConfig.sdk || "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+const authSdk = localConfig.sdk || "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+const [{ initializeApp }, {
+  getAuth, connectAuthEmulator, GoogleAuthProvider, signInWithPopup, onAuthStateChanged,
+  signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+  sendPasswordResetEmail, setPersistence, browserLocalPersistence, browserSessionPersistence
+}] = await Promise.all([import(appSdk), import(authSdk)]);
+
+const app = initializeApp(localConfig.emulator ? {
+  apiKey: "demo-damas-key",
+  authDomain: "localhost",
+  projectId: localConfig.projectId
+} : firebaseConfig);
 const auth = getAuth(app);
+if (localConfig.emulator) connectAuthEmulator(auth, localConfig.emulator, { disableWarnings: true });
 const provider = new GoogleAuthProvider();
 
 const loginButton = document.getElementById("google-login");
 const logoutButton = document.getElementById("google-logout");
 const loginStatus = document.getElementById("login-status");
-const loginEmail = document.getElementById("login-email");
+const privateEmail = document.getElementById("login-email");
+const profileForm = document.getElementById("profile-form");
 const loginMessage = document.getElementById("login-message");
 
 let mode = "login";
+let guestMode = false;
 
-function notifyGame(token) {
+function notifyGame(getToken) {
   window.dispatchEvent(
     new CustomEvent("firebase-user-token", {
-      detail: { token }
+      detail: { getToken }
     })
   );
 }
@@ -96,6 +99,7 @@ authScreen.innerHTML = `
       </div>
       <button type="submit" id="auth-submit" class="auth-submit">ENTRAR</button>
     </form>
+    <button type="button" id="auth-play-local" class="btn btn-secondary">Jogar localmente</button>
     <p id="auth-message" class="auth-message" role="status" aria-live="polite">Sua conta será usada para salvar seu perfil de jogador.</p>
     <p class="auth-security"><span>●</span> PARTIDAS SEGURAS E CONEXÃO EM TEMPO REAL</p>
   </div>
@@ -234,17 +238,22 @@ document.getElementById("auth-forgot").addEventListener("click", async () => {
   }
 });
 
-// Mantém o botão antigo de login funcional caso seja usado em outra parte da página.
-if (loginButton) {
-  loginButton.addEventListener("click", async () => {
-    try {
-      await applyPersistence();
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      showMessage(errorMessage(error), true);
-    }
-  });
+function showAuthScreen(visible) {
+  document.body.classList.toggle("auth-locked", visible);
+  authScreen.hidden = !visible;
 }
+
+document.getElementById("auth-play-local").addEventListener("click", () => {
+  guestMode = true;
+  showAuthScreen(false);
+  document.getElementById("reset").focus();
+});
+
+loginButton.addEventListener("click", () => {
+  guestMode = false;
+  showAuthScreen(true);
+  emailInput.focus();
+});
 
 // Sair da conta
 if (logoutButton) {
@@ -258,41 +267,34 @@ if (logoutButton) {
   });
 }
 
-// Estado da conta: mostra o jogo somente depois de autenticar.
-onAuthStateChanged(auth, async (user) => {
+// Atualiza a identidade da sessão sem mostrar dados da conta no jogo.
+onAuthStateChanged(auth, (user) => {
 
   // Reativa os botões sempre que o estado da conta mudar.
   setLoading(false);
 
   if (user) {
-    document.body.classList.remove("auth-locked");
-
-    if (loginStatus) {
-      loginStatus.textContent = "Conectado como " + (user.displayName || "Jogador");
-    }
-
-    if (loginEmail) {
-      loginEmail.textContent = user.email || "";
-    }
+    guestMode = false;
+    showAuthScreen(false);
+    loginStatus.textContent = "Conectado como Jogador";
+    loginMessage.textContent = "Conta conectada.";
+    privateEmail.textContent = user.email || "";
+    privateEmail.hidden = !user.email;
+    profileForm.hidden = false;
+    emailInput.value = "";
+    passwordInput.value = "";
 
     if (loginButton) loginButton.hidden = true;
     if (logoutButton) logoutButton.hidden = false;
 
-    authScreen.hidden = true;
-
-    try {
-      const token = await user.getIdToken();
-      notifyGame(token);
-    } catch (error) {
-      console.error("Erro ao obter token:", error);
-      showMessage("Não foi possível autenticar o jogo. Entre novamente.", true);
-    }
+    notifyGame(() => user.getIdToken());
   } else {
-    document.body.classList.add("auth-locked");
-    authScreen.hidden = false;
-
-    if (loginStatus) loginStatus.textContent = "Você não está conectado.";
-    if (loginEmail) loginEmail.textContent = "Entre para carregar sua conta.";
+    showAuthScreen(!guestMode);
+    loginStatus.textContent = "Você não está conectado.";
+    loginMessage.textContent = "Entre para jogar online.";
+    privateEmail.textContent = "";
+    privateEmail.hidden = true;
+    profileForm.hidden = true;
 
     if (loginButton) loginButton.hidden = false;
     if (logoutButton) logoutButton.hidden = true;
@@ -301,5 +303,5 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 
-document.body.classList.add("auth-locked");
+showAuthScreen(true);
 updateMode();

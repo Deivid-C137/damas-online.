@@ -1,10 +1,13 @@
 {
   "name": "damas",
   "version": "1.0.0",
-  "description": "",
-  "main": "script.js",
+  "description": "Damas brasileiras locais e online, com créditos virtuais.",
+  "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test test/rules.test.js test/nicknames.test.js",
+    "migrate": "node db/migrate.js",
+    "test:e2e": "node test/e2e.js"
   },
   "keywords": [],
   "author": "",
@@ -16,5 +19,8 @@
     "firebase-admin": "^14.5.0",
     "pg": "^8.23.1",
     "socket.io": "^4.8.4"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

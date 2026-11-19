@@ -40,20 +40,28 @@ const betStatusElement = $("bet-status");
   const blackPlayerElement = $("black-player");
   const whitePlayerElement = $("white-player");
 
-  const BLACK = "black";
-  const WHITE = "white";
-  const SIZE = 8;
+  const { BLACK, WHITE, SIZE, createMatch, getLegalMoves, applyMove } = DamasRules;
 
-  let board = [];
-  let turn = BLACK;
+  let match = createMatch();
+  let { board, turn, mustContinue, capturedThisTurn } = match;
   let selectedPiece = null;
   let legalMoves = [];
-  let mustContinue = null;
   let gameOver = false;
   let movePending = false;
 
   let socket = null;
-  let firebaseToken = null;
+  let getFirebaseToken = null;
+  let onlineBet = null;
+  let nicknames = { black: null, white: null };
+  let disconnectTimer = null;
+  let opponentConnected = false;
+  let submittedNickname = null;
+  let walletGeneration = 0;
+  let walletRetry = null;
+  let walletBalance = null;
+  let bettingAvailable = false;
+  let reconnectGraceMs = 120000;
+  let disconnectDeadline = null;
 
   let onlineRoomCode = null;
   let onlinePlayerColor = null;
@@ -62,57 +70,13 @@ const betStatusElement = $("bet-status");
 
   // ------------------ TABULEIRO ------------------
 
-  function initialBoard() {
-    const result = Array.from(
-      { length: SIZE },
-      () => Array(SIZE).fill(null)
-    );
-
-    for (let r = 0; r < 3; r++) {
-      for (let c = 0; c < SIZE; c++) {
-        if ((r + c) % 2 === 1) {
-          result[r][c] = { color: BLACK, king: false };
-        }
-      }
-    }
-
-    for (let r = 5; r < SIZE; r++) {
-      for (let c = 0; c < SIZE; c++) {
-        if ((r + c) % 2 === 1) {
-          result[r][c] = { color: WHITE, king: false };
-        }
-      }
-    }
-
-    return result;
-  }
-
   function resetBoard() {
-    board = initialBoard();
-    turn = BLACK;
+    match = createMatch();
+    ({ board, turn, mustContinue, capturedThisTurn } = match);
     selectedPiece = null;
     legalMoves = [];
-    mustContinue = null;
     gameOver = false;
     movePending = false;
-  }
-
-  function inside(r, c) {
-    return r >= 0 && r < SIZE && c >= 0 && c < SIZE;
-  }
-
-  function otherColor(color) {
-    return color === BLACK ? WHITE : BLACK;
-  }
-
-  function cloneBoard(source) {
-    return source.map(row =>
-      row.map(piece =>
-        piece
-          ? { color: piece.color, king: Boolean(piece.king) }
-          : null
-      )
-    );
   }
 
   function normalizeBoard(source) {
@@ -151,257 +115,37 @@ const betStatusElement = $("bet-status");
     return result;
   }
 
-  // ------------------ MOVIMENTOS LOCAIS ------------------
-  // Usados somente no modo offline.
-  // O servidor valida todas as jogadas online.
-
-  function simpleMoves(r, c) {
-    const piece = board[r]?.[c];
-    if (!piece) return [];
-
-    const moves = [];
-    const directions = piece.king
-      ? [[-1, -1], [-1, 1], [1, -1], [1, 1]]
-      : [[piece.color === BLACK ? 1 : -1, -1],
-         [piece.color === BLACK ? 1 : -1, 1]];
-
-    for (const [dr, dc] of directions) {
-      let nr = r + dr;
-      let nc = c + dc;
-
-      while (inside(nr, nc) && !board[nr][nc]) {
-        moves.push({
-          from: { row: r, col: c },
-          to: { row: nr, col: nc },
-          capture: null
-        });
-
-        if (!piece.king) break;
-
-        nr += dr;
-        nc += dc;
-      }
-    }
-
-    return moves;
-  }
-
-  function capturesFor(r, c, source = board) {
-    const piece = source[r]?.[c];
-    if (!piece) return [];
-
-    const captures = [];
-    const directions = [
-      [-1, -1], [-1, 1], [1, -1], [1, 1]
-    ];
-
-    for (const [dr, dc] of directions) {
-      let nr = r + dr;
-      let nc = c + dc;
-
-      if (!piece.king) {
-        const lr = r + dr * 2;
-        const lc = c + dc * 2;
-
-        if (
-          inside(nr, nc) &&
-          inside(lr, lc) &&
-          source[nr][nc] &&
-          source[nr][nc].color !== piece.color &&
-          !source[lr][lc]
-        ) {
-          captures.push({
-            from: { row: r, col: c },
-            to: { row: lr, col: lc },
-            capture: { row: nr, col: nc }
-          });
-        }
-
-        continue;
-      }
-
-      let enemy = null;
-
-      while (inside(nr, nc)) {
-        const occupant = source[nr][nc];
-
-        if (!occupant) {
-          if (enemy) {
-            captures.push({
-              from: { row: r, col: c },
-              to: { row: nr, col: nc },
-              capture: { ...enemy }
-            });
-          }
-        } else {
-          if (occupant.color === piece.color || enemy) break;
-          enemy = { row: nr, col: nc };
-        }
-
-        nr += dr;
-        nc += dc;
-      }
-    }
-
-    return captures;
-  }
-
-  function allCaptures(color = turn) {
-    const result = [];
-
-    for (let r = 0; r < SIZE; r++) {
-      for (let c = 0; c < SIZE; c++) {
-        if (board[r][c]?.color === color) {
-          result.push(...capturesFor(r, c));
-        }
-      }
-    }
-
-    return result;
-  }
-
   function legalMovesFor(r, c) {
-    const piece = board[r]?.[c];
+    if (gameOver || movePending) return [];
 
-    if (
-      !piece ||
-      piece.color !== turn ||
-      gameOver ||
-      movePending
-    ) {
-      return [];
-    }
-
-    if (
-      mustContinue &&
-      (mustContinue.r !== r || mustContinue.c !== c)
-    ) {
-      return [];
-    }
-
-    if (mustContinue) return capturesFor(r, c);
-
-    const captures = allCaptures();
-
-    if (captures.length) {
-      return captures.filter(
-        move =>
-          move.from.row === r &&
-          move.from.col === c
-      );
-    }
-
-    return simpleMoves(r, c);
-  }
-
-  function promote(piece, row) {
-    if (
-      piece &&
-      !piece.king &&
-      ((piece.color === BLACK && row === 7) ||
-       (piece.color === WHITE && row === 0))
-    ) {
-      piece.king = true;
-    }
+    return getLegalMoves({ board, mustContinue, capturedThisTurn }, r, c, turn)
+      .map(move => ({
+        from: { row: r, col: c },
+        to: { row: move.r, col: move.c },
+        ...move
+      }));
   }
 
   function applyLocalMove(move) {
-    const next = cloneBoard(board);
-    const piece = next[move.from.row][move.from.col];
+    const outcome = applyMove(match, { r: move.from.row, c: move.from.col }, move);
+    ({ board, turn, mustContinue, capturedThisTurn } = match);
+    selectedPiece = mustContinue ? { row: mustContinue.r, col: mustContinue.c } : null;
+    legalMoves = mustContinue ? legalMovesFor(mustContinue.r, mustContinue.c) : [];
+    gameOver = Boolean(outcome.winner || outcome.draw);
 
-    if (!piece) return false;
-
-    next[move.from.row][move.from.col] = null;
-    next[move.to.row][move.to.col] = piece;
-
-    if (move.capture) {
-      next[move.capture.row][move.capture.col] = null;
+    if (gameOver) {
+      const result = outcome.draw
+        ? "Empate por repetição de posição."
+        : outcome.winner === WHITE ? "As brancas venceram!" : "As pretas venceram!";
+      setStatus(result);
+      updateTurnBanner(result, "finished");
+    } else {
+      if (outcome.continuing) setStatus("Continue capturando com a mesma peça.");
+      updateTurnBanner();
     }
-
-    promote(piece, move.to.row);
-    board = next;
-
-    if (move.capture) {
-      const nextCaptures = capturesFor(
-        move.to.row,
-        move.to.col
-      );
-
-      if (nextCaptures.length) {
-        mustContinue = {
-          r: move.to.row,
-          c: move.to.col
-        };
-
-        selectedPiece = {
-          row: move.to.row,
-          col: move.to.col
-        };
-
-        legalMoves = nextCaptures;
-        setStatus("Continue capturando com a mesma peça.");
-        renderBoard();
-        updateTurnBanner();
-        return;
-      }
-    }
-
-    mustContinue = null;
-    selectedPiece = null;
-    legalMoves = [];
-    turn = otherColor(turn);
-
-    if (localGameEnded()) return;
 
     renderBoard();
-    updateTurnBanner();
     updatePlayerCards();
-  }
-
-  function localGameEnded() {
-    let blackCount = 0;
-    let whiteCount = 0;
-    let hasMove = false;
-
-    for (let r = 0; r < SIZE; r++) {
-      for (let c = 0; c < SIZE; c++) {
-        const piece = board[r][c];
-        if (!piece) continue;
-
-        if (piece.color === BLACK) blackCount++;
-        else whiteCount++;
-
-        if (piece.color === turn) {
-          if (simpleMoves(r, c).length || capturesFor(r, c).length) {
-            hasMove = true;
-          }
-        }
-      }
-    }
-
-    if (!blackCount || !whiteCount || !hasMove) {
-      gameOver = true;
-
-      const winner = !blackCount
-        ? WHITE
-        : !whiteCount
-          ? BLACK
-          : otherColor(turn);
-
-      setStatus(
-        `${winner === BLACK ? "Pretas" : "Brancas"} venceram!`
-      );
-
-      updateTurnBanner(
-        `${winner === BLACK ? "Pretas" : "Brancas"} venceram!`,
-        "finished"
-      );
-
-      renderBoard();
-      return true;
-    }
-
-    return false;
   }
 
   // ------------------ CLIQUES NO TABULEIRO ------------------
@@ -421,6 +165,10 @@ const betStatusElement = $("bet-status");
       }
 
       if (gameOver || movePending) return;
+      if (!opponentConnected) {
+        setStatus("Aguarde a reconexão do adversário.");
+        return;
+      }
 
       if (turn !== onlinePlayerColor) {
         setStatus("Aguarde a jogada do adversário.");
@@ -495,6 +243,9 @@ const betStatusElement = $("bet-status");
   // ------------------ DESENHO DO TABULEIRO ------------------
 
   function renderBoard() {
+    const focused = boardElement.contains(document.activeElement)
+      ? document.activeElement.dataset
+      : null;
     boardElement.innerHTML = "";
 
     for (let r = 0; r < SIZE; r++) {
@@ -507,21 +258,22 @@ const betStatusElement = $("bet-status");
 
         cell.dataset.row = String(r);
         cell.dataset.col = String(c);
-        cell.setAttribute("aria-label", `Linha ${r + 1}, coluna ${c + 1}`);
-
-        if (
-          selectedPiece &&
-          selectedPiece.row === r &&
-          selectedPiece.col === c
-        ) {
-          cell.classList.add("selected");
-        }
-
-        if (legalMoves.some(m => m.to.row === r && m.to.col === c)) {
-          cell.classList.add("target");
-        }
-
+        const selected = selectedPiece?.row === r && selectedPiece?.col === c;
+        const target = legalMoves.some(m => m.to.row === r && m.to.col === c);
         const piece = board[r][c];
+        const description = piece
+          ? `${piece.king ? "Dama" : "Peça"} ${piece.color === WHITE ? "branca" : "preta"}`
+          : "Vazia";
+        const captured = capturedThisTurn.some(pos => pos.r === r && pos.c === c);
+        cell.setAttribute("aria-label", [
+          `Linha ${r + 1}, coluna ${c + 1}`, description,
+          captured && "Capturada", selected && "Selecionada", target && "Destino disponível"
+        ].filter(Boolean).join(", "));
+        cell.setAttribute("aria-pressed", String(selected));
+        cell.classList.toggle("captured", captured);
+
+        cell.classList.toggle("selected", selected);
+        cell.classList.toggle("target", target);
 
         if (piece) {
           const element = document.createElement("div");
@@ -532,6 +284,9 @@ const betStatusElement = $("bet-status");
 
         cell.addEventListener("click", () => handleCellClick(r, c));
         boardElement.appendChild(cell);
+        if (focused?.row === String(r) && focused.col === String(c)) {
+          cell.focus({ preventScroll: true });
+        }
       }
     }
   }
@@ -547,33 +302,51 @@ const betStatusElement = $("bet-status");
   }
   // ------------------ CARTEIRA VIRTUAL ------------------
 
-  function updateWallet(balance) {
-    if (!walletBalanceElement) return;
+  const balanceFormat = new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 
-    walletBalanceElement.textContent = Number(balance).toLocaleString(
-      "pt-BR",
-      {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      }
-    );
+  function cancelWalletRequest() {
+    walletGeneration++;
+    clearTimeout(walletRetry);
+    walletRetry = null;
   }
 
-  function requestWallet() {
+  function renderWallet(message) {
+    walletBalanceElement.textContent = walletBalance === null ? "—" : balanceFormat.format(walletBalance);
+    walletMessageElement.textContent = message;
+  }
+
+  function requestWallet(attempt = 0) {
+    cancelWalletRequest();
     if (!socket?.connected) {
-      if (walletMessageElement) {
-        walletMessageElement.textContent =
-          "Aguardando conexão com o servidor.";
-      }
+      renderWallet(walletBalance === null
+        ? "Aguardando conexão para consultar seu saldo."
+        : "Último saldo conhecido. Aguardando conexão.");
       return;
     }
 
-    if (walletMessageElement) {
-      walletMessageElement.textContent = "Carregando saldo...";
-    }
+    const generation = walletGeneration;
+    renderWallet(walletBalance === null ? "Carregando saldo..." : "Atualizando saldo...");
+    socket.timeout(9000).emit("wallet:request", (error, payload) => {
+      if (generation !== walletGeneration) return;
+      if (!error && payload?.success && typeof payload.balance === "number" &&
+          Number.isFinite(payload.balance) && payload.balance >= 0) {
+        walletBalance = payload.balance;
+        renderWallet("Saldo atualizado.");
+        return;
+      }
 
-    socket.emit("wallet:request");
+      const retry = socket?.connected && attempt < 3 && (error || payload?.retryable);
+      const message = walletBalance === null
+        ? "Saldo temporariamente indisponível."
+        : "Último saldo conhecido. Atualização indisponível.";
+      renderWallet(message + (retry ? " Tentando novamente..." : " Use Atualizar saldo para tentar de novo."));
+      if (retry) walletRetry = setTimeout(() => requestWallet(attempt + 1), 2000 * (attempt + 1));
+    });
   }
+
   function updateLiveStatus(active) {
     if (!liveStatusElement || !liveStatusText) return;
 
@@ -606,7 +379,7 @@ const betStatusElement = $("bet-status");
       turnTitleElement.textContent = message
         ? message.toUpperCase()
         : !onlineRoomCode
-          ? "MODO LOCAL"
+          ? `MODO LOCAL · VEZ DAS ${turn === WHITE ? "BRANCAS" : "PRETAS"}`
           : !onlineGameActive
             ? "⏳ AGUARDANDO OPONENTE"
             : turn === onlinePlayerColor
@@ -631,29 +404,34 @@ const betStatusElement = $("bet-status");
   }
 
   function updatePlayerCards() {
+    function playerLabel(color, fallback) {
+      const name = nicknames[color] || fallback;
+      return onlinePlayerColor === color ? `${name} (você)` : name;
+    }
+
     if (blackPlayerElement) {
       blackPlayerElement.textContent = onlineRoomCode
-        ? onlinePlayerColor === BLACK ? "Você" : "Jogador das pretas"
+        ? playerLabel(BLACK, "Jogador das pretas")
         : "Partida local";
     }
 
     if (whitePlayerElement) {
       whitePlayerElement.textContent = onlineRoomCode
-        ? onlinePlayerColor === WHITE ? "Você" : "Jogador das brancas"
+        ? playerLabel(WHITE, "Jogador das brancas")
         : "Partida local";
     }
 
     if (blackCardElement) {
       blackCardElement.classList.toggle(
         "active-turn",
-        Boolean(onlineGameActive && turn === BLACK)
+        Boolean(!gameOver && (!onlineRoomCode || onlineGameActive) && turn === BLACK)
       );
     }
 
     if (whiteCardElement) {
       whiteCardElement.classList.toggle(
         "active-turn",
-        Boolean(onlineGameActive && turn === WHITE)
+        Boolean(!gameOver && (!onlineRoomCode || onlineGameActive) && turn === WHITE)
       );
     }
   }
@@ -678,67 +456,121 @@ const betStatusElement = $("bet-status");
 
   // ------------------ SOCKET.IO ------------------
 
-function restoreOnlineRoom(payload) {
-  if (!payload || typeof payload !== "object") {
-    setStatus("Dados inválidos para recuperar a partida.");
-    return;
+  function renderBet() {
+    const pending = onlineBet?.status === "pending";
+    const canRespond = pending && onlineBet.responderColor === onlinePlayerColor;
+    const ready = Boolean(bettingAvailable && socket?.connected && onlineGameActive && opponentConnected && !gameOver);
+    betCreateButton.disabled = !ready || Boolean(onlineBet && onlineBet.status !== "cancelled");
+    betResponseArea.hidden = !canRespond || !ready;
+    betAcceptButton.disabled = !canRespond || !ready;
+    betDeclineButton.disabled = !canRespond || !ready;
+    if (canRespond) {
+      const amount = Number(onlineBet.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
+      betRequestMessage.textContent = `Seu adversário propôs uma aposta de ${amount} créditos. Deseja aceitar?`;
+    }
+    if (!bettingAvailable && onlineGameActive) {
+      betStatusElement.textContent = "Apostas temporariamente indisponíveis.";
+      return;
+    }
+    betStatusElement.textContent = ({
+      pending: canRespond ? "Você recebeu um pedido de aposta." : "Aguardando resposta do adversário.",
+      reserved: gameOver ? "Créditos reservados. Liquidação pendente." : "Aposta aceita. Créditos reservados.",
+      cancelled: "Aposta cancelada.",
+      finished: "Aposta liquidada."
+    })[onlineBet?.status] || "Aguardando uma aposta.";
   }
 
-  const snapshot = payload.snapshot || payload.state || payload;
-  const code = getRoomCode(payload) || getRoomCode(snapshot);
-  const normalized = normalizeBoard(snapshot.board);
-
-  if (!normalized) {
-    setStatus("Não foi possível recuperar o tabuleiro.");
-    return;
+  function hideDisconnectOverlay() {
+    clearInterval(disconnectTimer);
+    disconnectTimer = null;
+    disconnectDeadline = null;
+    $("disconnect-overlay").hidden = true;
   }
 
-  if (code) {
+  function showDisconnectOverlay() {
+    clearInterval(disconnectTimer);
+    const overlay = $("disconnect-overlay");
+    overlay.hidden = false;
+    // Local estimate until the server confirms the state of the room.
+    disconnectDeadline ??= Date.now() + reconnectGraceMs;
+    const countdown = $("disconnect-countdown");
+    function tick() {
+      const remaining = Math.max(0, Math.ceil((disconnectDeadline - Date.now()) / 1000));
+      countdown.textContent = `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
+      if (!remaining) clearInterval(disconnectTimer);
+    }
+    tick();
+    disconnectTimer = setInterval(tick, 1000);
+  }
+
+  function clearOnlineRoom(message) {
+    onlineRoomCode = null;
+    onlinePlayerColor = null;
+    onlineGameActive = false;
+    opponentConnected = false;
+    onlineBet = null;
+    nicknames = { black: null, white: null };
+    roomCodeInput.value = "";
+    $("leave-room").hidden = true;
+    hideDisconnectOverlay();
+    resetBoard();
+    renderBoard();
+    updatePlayerCards();
+    updateTurnBanner();
+    renderBet();
+    if (message) {
+      setStatus(message);
+      setRoomInfo(message);
+    }
+  }
+
+  function restoreOnlineRoom(payload) {
+    const code = getRoomCode(payload);
+    const normalized = normalizeBoard(payload?.board);
+    if (!code || !normalized) {
+      setStatus("Não foi possível sincronizar o tabuleiro.");
+      return;
+    }
+
     onlineRoomCode = code;
     roomCodeInput.value = code;
-  }
+    if (payload.color === BLACK || payload.color === WHITE) onlinePlayerColor = payload.color;
+    if (!onlinePlayerColor) return;
 
-  if (payload.color === BLACK || payload.color === WHITE) {
-    onlinePlayerColor = payload.color;
-  } else if (snapshot.color === BLACK || snapshot.color === WHITE) {
-    onlinePlayerColor = snapshot.color;
-  }
-
-  if (!onlineRoomCode || !onlinePlayerColor) {
-    setStatus("Faltam dados para recuperar a sala.");
-    return;
-  }
-
-  board = normalized;
-  turn = snapshot.turn === WHITE ? WHITE : BLACK;
-
-  const continuation = snapshot.mustContinue || null;
-
-  mustContinue =
-    continuation &&
-    Number.isInteger(continuation.r) &&
-    Number.isInteger(continuation.c)
-      ? { r: continuation.r, c: continuation.c }
+    board = normalized;
+    turn = payload.turn === BLACK ? BLACK : WHITE;
+    mustContinue = payload.mustContinue || null;
+    capturedThisTurn = Array.isArray(payload.capturedThisTurn) ? payload.capturedThisTurn : [];
+    gameOver = Boolean(payload.gameOver);
+    movePending = false;
+    onlineGameActive = Boolean(payload.started) && !gameOver;
+    opponentConnected = Boolean(payload.players?.[onlinePlayerColor === WHITE ? BLACK : WHITE]);
+    onlineBet = payload.bet || null;
+    if (Number.isFinite(payload.reconnectGraceMs)) reconnectGraceMs = payload.reconnectGraceMs;
+    nicknames = payload.nicknames || { black: null, white: null };
+    selectedPiece = mustContinue && turn === onlinePlayerColor
+      ? { row: mustContinue.r, col: mustContinue.c }
       : null;
+    legalMoves = selectedPiece ? legalMovesFor(selectedPiece.row, selectedPiece.col) : [];
 
-  gameOver = Boolean(snapshot.gameOver);
-  selectedPiece = null;
-  legalMoves = [];
-  movePending = false;
-  onlineGameActive = Boolean(snapshot.started);
+    $("leave-room").hidden = false;
+    hideDisconnectOverlay();
+    renderBoard();
+    updatePlayerCards();
+    renderBet();
 
-  renderBoard();
-  updatePlayerCards();
-
-  setRoomInfo(`Sala ${onlineRoomCode} recuperada.`);
-  setStatus(
-    onlineGameActive
-      ? "Partida recuperada."
-      : "Sala recuperada. Aguardando o adversário."
-  );
-
-  updateTurnBanner();
-}
+    setRoomInfo(onlineGameActive
+      ? `Sala ${code} · ${opponentConnected ? "Partida em andamento" : "Aguardando reconexão do adversário"}.`
+      : `Sala ${code}.`);
+    const message = payload.message || (gameOver
+      ? payload.winner === WHITE ? "As brancas venceram!"
+        : payload.winner === BLACK ? "As pretas venceram!" : "Partida empatada."
+      : null);
+    if (message) setStatus(message);
+    if (gameOver) updateTurnBanner(message, "finished");
+    else if (!opponentConnected && onlineGameActive) updateTurnBanner("AGUARDANDO RECONEXÃO", "waiting");
+    else updateTurnBanner();
+  }
 
   function disconnectSocket() {
     if (socket) {
@@ -747,47 +579,37 @@ function restoreOnlineRoom(payload) {
       socket = null;
     }
 
-    onlineRoomCode = null;
-    onlinePlayerColor = null;
-    onlineGameActive = false;
-    movePending = false;
-
-    updatePlayerCards();
-    updateTurnBanner();
+    if (onlineRoomCode) clearOnlineRoom();
+    $("profile-nickname").value = "";
+    $("profile-message").textContent = "";
+    $("profile-save").disabled = true;
+    cancelWalletRequest();
+    walletBalance = null;
+    bettingAvailable = false;
+    renderWallet("Entre para consultar seu saldo.");
+    renderBet();
   }
 
-  function connectSocket(token) {
-    if (!token) {
-      disconnectSocket();
-      setStatus("Entre com o Google para jogar online.");
-      setRoomInfo("Faça login antes de criar ou entrar em uma sala.");
-      return;
-    }
-
-    firebaseToken = token;
-
-    if (socket?.connected && socket.auth?.token === token) return;
-
-    if (socket) {
-      socket.removeAllListeners();
-      socket.disconnect();
-      socket = null;
-    }
-
-    if (typeof io !== "function") {
-      setStatus("Socket.IO não foi carregado.");
-      return;
-    }
+  function connectSocket() {
+    if (socket || typeof io !== "function") return;
 
     socket = io({
-      auth: { token },
+      autoConnect: false,
+      auth: async callback => {
+        try {
+          callback({ token: await getFirebaseToken?.() });
+        } catch {
+          callback({});
+        }
+      },
       reconnection: true,
-      reconnectionAttempts: 10,
       reconnectionDelay: 1000
     });
 
     registerSocketEvents();
+    socket.connect();
   }
+
 function registerSocketEvents() {
 
   // =============================================
@@ -800,7 +622,7 @@ function registerSocketEvents() {
     // Solicita o saldo da carteira
     requestWallet();
 
-    // Verifica se precisa recuperar uma sala online
+    // O servidor informa se a conta ainda possui uma sala.
     if (onlineRoomCode) {
       onlineGameActive = false;
       movePending = false;
@@ -819,62 +641,50 @@ function registerSocketEvents() {
   // RESPOSTA DA CARTEIRA VIRTUAL
   // =============================================
 
-  socket.on("wallet:response", (payload) => {
-
-    if (!payload || payload.success !== true) {
-      if (walletMessageElement) {
-        walletMessageElement.textContent =
-          payload?.message || "Não foi possível carregar sua carteira.";
-      }
-      return;
-    }
-
-    const balance = Number(payload.balance);
-
-    if (!Number.isFinite(balance) || balance < 0) {
-      if (walletMessageElement) {
-        walletMessageElement.textContent =
-          "O servidor retornou um saldo inválido.";
-      }
-      return;
-    }
-
-    updateWallet(balance);
-
-    if (walletMessageElement) {
-      walletMessageElement.textContent =
-        "Carteira sincronizada com sucesso.";
-    }
+  socket.on("wallet:changed", () => requestWallet());
+  socket.on("bet:availability", ({ ready }) => {
+    bettingAvailable = ready === true;
+    renderBet();
   });
- 
 
-
-  socket.on("roomResumed", payload => {
-    restoreOnlineRoom(payload);
+  socket.on("profile:state", ({ nickname }) => {
+    const input = $("profile-nickname");
+    if (document.activeElement !== input) input.value = nickname || "";
+    $("profile-save").disabled = false;
   });
-socket.on("playerReconnected", payload => {
-  if (!onlineRoomCode) return;
-
-  movePending = false;
-
-  setStatus("O adversário reconectou. Sincronizando a partida...");
-  setRoomInfo(`Sala ${onlineRoomCode}: reconexão do adversário detectada.`);
-
-  // Solicita ao servidor uma atualização do estado da partida.
-  socket.emit("requestRoomState", {
-    code: onlineRoomCode
+  socket.on("profile:saved", ({ nickname }) => {
+    const input = $("profile-nickname");
+    if (input.value === submittedNickname) input.value = nickname || "";
+    submittedNickname = null;
+    $("profile-message").textContent = nickname ? "Apelido salvo." : "O nome padrão está ativo.";
+    $("profile-save").disabled = false;
   });
-});
+  socket.on("profile:error", ({ message }) => {
+    $("profile-message").textContent = message;
+    $("profile-save").disabled = false;
+  });
+  socket.on("profiles:update", payload => {
+    if (payload.code !== onlineRoomCode) return;
+    nicknames = payload.nicknames;
+    updatePlayerCards();
+  });
+
+  socket.on("roomResumed", restoreOnlineRoom);
+  socket.on("playerReconnected", payload => {
+    if (payload.code === onlineRoomCode) restoreOnlineRoom(payload);
+  });
   socket.on("roomStateUnavailable", payload => {
-    onlineGameActive = false;
+    if (onlineRoomCode) clearOnlineRoom(messageOf(payload, "A partida foi encerrada."));
+  });
+  socket.on("roomLeft", payload => clearOnlineRoom(payload.message));
+  socket.on("playerLeft", payload => clearOnlineRoom(payload.message));
+  socket.on("playerDisconnected", payload => {
     movePending = false;
-
-    setStatus(
-      messageOf(payload, "Não foi possível recuperar a partida.")
-    );
-
-    setRoomInfo("Verifique o estado da sala antes de sair.");
-    updateTurnBanner("RECONEXÃO NECESSÁRIA", "waiting");
+    opponentConnected = false;
+    if (gameOver) return;
+    setRoomInfo(payload.message);
+    updateTurnBanner("AGUARDANDO RECONEXÃO", "waiting");
+    renderBet();
   });
 
   socket.on("connect_error", error => {
@@ -882,17 +692,18 @@ socket.on("playerReconnected", payload => {
     setRoomInfo(error?.message || "Verifique o login e o servidor.");
   });
 
-  socket.on("disconnect", reason => {
+  socket.on("disconnect", () => {
+    bettingAvailable = false;
+    requestWallet();
     onlineGameActive = false;
     movePending = false;
-
-    setStatus("Conexão perdida. A partida online está bloqueada.");
-    setRoomInfo(`Conexão interrompida: ${reason}`);
+    $("profile-save").disabled = true;
+    renderBet();
+    if (!onlineRoomCode) return;
+    setStatus("Conexão perdida. Aguardando reconexão.");
     updateTurnBanner("RECONEXÃO NECESSÁRIA", "waiting");
+    showDisconnectOverlay();
   });
-
-  
-
 
     socket.on("roomCreated", payload => {
       const code = getRoomCode(payload);
@@ -941,44 +752,8 @@ socket.on("playerReconnected", payload => {
       updateTurnBanner();
     });
 
-    // O servidor atual envia este evento quando o segundo jogador entra.
-   
-socket.on("gameReady", payload => {
-  if (!onlineRoomCode) return;
-
-  const normalized = normalizeBoard(payload?.board);
-
-  if (!normalized) {
-    setStatus("O servidor enviou um tabuleiro inválido.");
-    return;
-  }
-
-  board = normalized;
-  turn = payload.turn === WHITE ? WHITE : BLACK;
-
-  const continuation = payload.mustContinue;
-
-  mustContinue =
-    continuation &&
-    Number.isInteger(continuation.r) &&
-    Number.isInteger(continuation.c)
-      ? { r: continuation.r, c: continuation.c }
-      : null;
-
-  gameOver = Boolean(payload.gameOver);
-  movePending = false;
-  selectedPiece = null;
-  legalMoves = [];
-  onlineGameActive = Boolean(payload.started) && !gameOver;
-
-  setRoomInfo(`Partida sincronizada na sala ${onlineRoomCode}.`);
-  setStatus(payload.message || "Partida sincronizada!");
-
-  renderBoard();
-  updatePlayerCards();
-  updateTurnBanner();
-});
-
+    socket.on("gameReady", restoreOnlineRoom);
+    socket.on("roomInfo", restoreOnlineRoom);
 
     socket.on("roomError", payload => {
       setRoomInfo(messageOf(payload, "Erro ao acessar a sala."));
@@ -990,119 +765,31 @@ socket.on("gameReady", payload => {
       renderBoard();
     });
 
-    socket.on("boardUpdate", payload => {
-      if (!onlineRoomCode) return;
+    socket.on("boardUpdate", restoreOnlineRoom);
 
-      const normalized = normalizeBoard(payload?.board);
-
-      if (!normalized) {
-        setStatus("Atualização de tabuleiro inválida.");
-        return;
-      }
-
-      board = normalized;
-      turn = payload.turn === WHITE ? WHITE : BLACK;
-
-      const continuation = payload.mustContinue;
-
-      mustContinue = continuation &&
-        Number.isInteger(continuation.r) &&
-        Number.isInteger(continuation.c)
-          ? { r: continuation.r, c: continuation.c }
-          : null;
-
-      gameOver = Boolean(payload.gameOver);
-      movePending = false;
-      selectedPiece = null;
-      legalMoves = [];
-
-      // Receber boardUpdate significa que a partida já começou.
-      onlineGameActive = true;
-
-      renderBoard();
-      updatePlayerCards();
-
-      if (gameOver) {
-        const winner = payload.winner;
-        const finalMessage = payload.message ||
-          (winner
-            ? `${winner === BLACK ? "Pretas" : "Brancas"} venceram!`
-            : "Partida encerrada.");
-
-        setStatus(finalMessage);
-        updateTurnBanner(finalMessage, "finished");
-      } else {
-        setStatus(payload.message || "Tabuleiro sincronizado.");
-        updateTurnBanner();
-      }
+    socket.on("bet:created", data => {
+      if (data.code !== onlineRoomCode) return;
+      onlineBet = { ...data, responderColor: onlinePlayerColor };
+      renderBet();
     });
 
-    // Nome do evento enviado pelo server.js atual.
-    socket.on("playerLeft", payload => {
-      onlineGameActive = false;
-      movePending = false;
-      selectedPiece = null;
-      legalMoves = [];
-
-      setRoomInfo(messageOf(payload, "O adversário saiu da sala."));
-      setStatus("Partida interrompida. Crie uma nova sala para jogar.");
-      updateTurnBanner("AGUARDANDO OPONENTE", "waiting");
-      renderBoard();
+    socket.on("bet:sent", data => {
+      if (data.code !== onlineRoomCode) return;
+      onlineBet = data;
+      renderBet();
     });
 
-   socket.on("playerDisconnected", payload => {
-  movePending = false;
+    socket.on("bet:response", data => {
+      if (!onlineBet || onlineBet.id !== data.id || data.code !== onlineRoomCode) return;
+      onlineBet.status = data.status;
+      renderBet();
+      betStatusElement.textContent = data.message;
+    });
 
-  setRoomInfo(
-    messageOf(payload, "O adversário desconectou. Aguardando reconexão.")
-  );
-
-  setStatus("O adversário desconectou. Aguardando reconexão.");
-  updateTurnBanner("AGUARDANDO OPONENTE", "waiting");
-});
-socket.on("playerDisconnected", payload => {
-  movePending = false;
-
-  setRoomInfo(
-    messageOf(payload, "O adversário desconectou. Aguardando reconexão.")
-  );
-
-  setStatus("O adversário desconectou. Aguardando reconexão.");
-  updateTurnBanner("AGUARDANDO OPONENTE", "waiting");
-});
-
-// =============================================
-// SISTEMA DE APOSTAS VIRTUAIS
-// =============================================
-
-socket.on("bet:created", data => {
-  betResponseArea.hidden = false;
-
-  betRequestMessage.textContent =
-    `Seu adversário propôs uma aposta de ${Number(data.amount).toFixed(2)} créditos. Deseja aceitar?`;
-
-  betStatusElement.textContent = "Você recebeu um pedido de aposta.";
-});
-
-socket.on("bet:sent", data => {
-  betResponseArea.hidden = true;
-  betStatusElement.textContent = data.message;
-});
-
-socket.on("bet:response", data => {
-  betResponseArea.hidden = true;
-  betStatusElement.textContent = data.message;
-
-  if (data.accepted) {
-    requestWallet();
-  }
-});
-
-socket.on("bet:error", data => {
-  betStatusElement.textContent =
-    data.message || "Não foi possível processar a aposta.";
-});
-
+    socket.on("bet:error", data => {
+      renderBet();
+      betStatusElement.textContent = data.message || "Não foi possível processar a aposta.";
+    });
   }
 
   // ------------------ SALAS ------------------
@@ -1112,10 +799,15 @@ socket.on("bet:error", data => {
 function registerRoomControls() {
   if (roomControlsRegistered) return;
   roomControlsRegistered = true;
+  $("leave-room").addEventListener("click", () => socket?.emit("leaveRoom"));
+  $("reconnect-button").addEventListener("click", () => {
+    if (socket?.connected) socket.emit("requestRoomState");
+    else socket?.connect();
+  });
 
   createRoomButton.addEventListener("click", () => {
     if (!socket?.connected) {
-      setRoomInfo("Entre com o Google e aguarde a conexão.");
+      setRoomInfo("Entre na sua conta e aguarde a conexão.");
       return;
     }
 
@@ -1130,7 +822,7 @@ function registerRoomControls() {
 
   joinRoomButton.addEventListener("click", () => {
     if (!socket?.connected) {
-      setRoomInfo("Entre com o Google e aguarde a conexão.");
+      setRoomInfo("Entre na sua conta e aguarde a conexão.");
       return;
     }
 
@@ -1179,9 +871,9 @@ function registerBetControls() {
       return;
     }
 
-    if (!Number.isFinite(amount) || amount <= 0 || amount > 5) {
+    if (!Number.isFinite(amount) || amount < 0.01 || amount > 5) {
       betStatusElement.textContent =
-        "A aposta deve ser maior que zero e de no máximo 5 créditos.";
+        "A aposta deve ser entre 0,01 e 5 créditos.";
       return;
     }
 
@@ -1198,7 +890,7 @@ function registerBetControls() {
     betAcceptButton.disabled = true;
     betDeclineButton.disabled = true;
 
-    socket.emit("bet:respond", { accepted: true });
+    socket.emit("bet:respond", { accepted: true, betId: onlineBet?.id });
   });
 
   betDeclineButton.addEventListener("click", () => {
@@ -1208,7 +900,7 @@ function registerBetControls() {
     betAcceptButton.disabled = true;
     betDeclineButton.disabled = true;
 
-    socket.emit("bet:respond", { accepted: false });
+    socket.emit("bet:respond", { accepted: false, betId: onlineBet?.id });
   });
 }
 
@@ -1269,24 +961,31 @@ function registerBetControls() {
   }
 
   resetButton.addEventListener("click", startLocalGame);
+  $("profile-form").addEventListener("submit", event => {
+    event.preventDefault();
+    if (!socket?.connected) {
+      $("profile-message").textContent = "Aguarde a conexão para salvar.";
+      return;
+    }
+    $("profile-save").disabled = true;
+    submittedNickname = $("profile-nickname").value;
+    socket.emit("profile:update", { nickname: submittedNickname });
+  });
 
   if (refreshWalletButton) {
-  refreshWalletButton.addEventListener("click", requestWallet);
+    refreshWalletButton.addEventListener("click", () => requestWallet());
 }
 
   // ------------------ LOGIN FIREBASE ------------------
 
   window.addEventListener("firebase-user-token", event => {
-    const token = event.detail?.token || null;
-    firebaseToken = token;
-
-    if (!token) {
+    getFirebaseToken = event.detail?.getToken || null;
+    if (!getFirebaseToken) {
       disconnectSocket();
-      setStatus("Entre com o Google para jogar online.");
+      setStatus("Entre na sua conta para jogar online.");
       return;
     }
-
-    connectSocket(token);
+    connectSocket();
   });
 
   // ------------------ INICIALIZAÇÃO ------------------
@@ -1310,6 +1009,7 @@ function registerBetControls() {
 
   registerRoomControls();
 registerBetControls();
+  renderBet();
 
 resetBoard();
 renderBoard();
