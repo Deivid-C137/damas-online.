@@ -309,6 +309,14 @@ async function main() {
   const unbet = await createRoom(black.page, white.page);
   await black.page.locator("#arena-bet").waitFor({ state: "hidden" });
   await white.page.locator("#leave-room").click();
+  const resignDialog = white.page.getByRole("dialog", { name: "Desistir da partida?" });
+  await resignDialog.waitFor({ state: "visible" });
+  await waitText(white.page.locator("#resign-stake"), /Nenhum crédito será descontado/);
+  await resignDialog.getByRole("button", { name: "Continuar jogando" }).click();
+  await resignDialog.waitFor({ state: "hidden" });
+  await waitText(black.page.locator("#room-info"), /Partida em andamento/);
+  await white.page.locator("#leave-room").click();
+  await resignDialog.getByRole("button", { name: "Confirmar desistência" }).click();
   await black.page.locator("#arena-result").waitFor({ state: "visible" });
   await waitText(black.page.locator("#arena-result-reason"), /As brancas desistiram/);
   await black.page.locator("#arena-result-credit").waitFor({ state: "hidden" });
@@ -460,10 +468,10 @@ async function main() {
   try {
     await resignBlocker.query("BEGIN");
     await resignBlocker.query("LOCK TABLE public.bet_transactions IN ACCESS EXCLUSIVE MODE");
-    await white.page.locator("#leave-room").evaluate(button => {
-      button.click();
-      button.click();
-    });
+    await white.page.locator("#leave-room").click();
+    await resignDialog.waitFor({ state: "visible" });
+    await waitText(white.page.locator("#resign-stake"), /perde os 5,00 créditos.*9,50 créditos/);
+    await resignDialog.getByRole("button", { name: "Confirmar desistência" }).click();
     await waitText(black.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
     await waitText(white.page.locator("#status"), /As brancas desistiram/);
     await white.page.locator("#return-lobby").click();

@@ -376,6 +376,15 @@
   <span id="offline-status" role="status">Conexão perdida. Tentando reconectar…</span>
   <button id="retry-connection" type="button" class="btn btn-secondary">Tentar reconectar</button>
 </div>
+<dialog id="resign-dialog" class="resign-dialog" aria-labelledby="resign-title" aria-describedby="resign-message resign-stake">
+  <h2 id="resign-title">Desistir da partida?</h2>
+  <p id="resign-message">Seu adversário vence por abandono.</p>
+  <p id="resign-stake" aria-live="polite"></p>
+  <form method="dialog" class="arena-result-actions">
+    <button class="btn btn-secondary" value="cancel" autofocus>Continuar jogando</button>
+    <button class="btn btn-danger" id="confirm-resign" value="resign">Confirmar desistência</button>
+  </form>
+</dialog>
 <!-- ALERTA DO ADVERSÁRIO -->
 <dialog id="disconnect-overlay" class="disconnect-overlay" aria-labelledby="disconnect-title" aria-describedby="disconnect-description disconnect-warning">
   <div class="disconnect-modal">
