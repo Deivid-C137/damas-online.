@@ -1307,6 +1307,20 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
 .arena-result-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .85rem; }
 .arena-result-actions .btn { width: auto; }
 
+.resign-dialog {
+  width: min(480px, calc(100% - 2rem));
+  padding: clamp(1rem, 4vw, 1.5rem);
+  border: 1px solid #ff697b;
+  border-radius: .8rem;
+  background: var(--panel);
+  color: var(--text);
+}
+.resign-dialog::backdrop { background: rgb(0 0 0 / 72%); }
+.resign-dialog h2 { margin: 0 0 .75rem; }
+.resign-dialog p { color: var(--muted); margin: .5rem 0; }
+.resign-dialog .btn-danger { background: #902b3d; color: white; }
+.resign-dialog button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+
 .arena-sr-only {
   position: absolute;
   width: 1px;

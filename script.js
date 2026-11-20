@@ -493,7 +493,22 @@ const betStatusElement = $("bet-status");
 
   // ------------------ SOCKET.IO ------------------
 
+  function updateResignMessage() {
+    const credits = value => `${balanceFormat.format(Number(value))} créditos`;
+    $("resign-stake").textContent = onlineBet?.status === "reserved"
+      ? `Você perde os ${credits(onlineBet.amount)} já reservados. Seu adversário recebe o prêmio líquido de ${credits(onlineBet.prize)}.`
+      : onlineBet?.status === "pending"
+        ? "A aposta ainda não foi aceita. Se for aceita antes da confirmação, você perde a reserva e seu adversário recebe o prêmio líquido."
+        : "Não há aposta aceita. Nenhum crédito será descontado.";
+  }
+
+  function cancelResignDialog() {
+    const dialog = $("resign-dialog");
+    if (dialog.open) dialog.close("cancel");
+  }
+
   function renderBet() {
+    if ($("resign-dialog").open) updateResignMessage();
     renderArenaSummary();
     const pending = onlineBet?.status === "pending";
     const canRespond = pending && onlineBet.responderColor === onlinePlayerColor;
@@ -536,6 +551,7 @@ const betStatusElement = $("bet-status");
     const countdown = $("disconnect-countdown");
     const status = $("disconnect-status");
     status.textContent = "Aguardando o adversário voltar.";
+    cancelResignDialog();
     if (!overlay.open) overlay.showModal();
 
     if (!Number.isFinite(deadline) || !Number.isFinite(serverTime)) {
@@ -560,6 +576,7 @@ const betStatusElement = $("bet-status");
   }
 
   function clearOnlineRoom(message) {
+    cancelResignDialog();
     onlineRoomCode = null;
     onlinePlayerColor = null;
     onlineGameActive = false;
@@ -601,6 +618,7 @@ const betStatusElement = $("bet-status");
     mustContinue = payload.mustContinue || null;
     capturedThisTurn = Array.isArray(payload.capturedThisTurn) ? payload.capturedThisTurn : [];
     gameOver = Boolean(payload.gameOver);
+    if (gameOver) cancelResignDialog();
     onlineResult = gameOver ? { winner: payload.winner, reason: payload.resultReason || payload.message || "" } : null;
     movePending = false;
     onlineGameActive = Boolean(payload.started) && !gameOver;
@@ -813,6 +831,7 @@ function registerSocketEvents() {
   });
 
   socket.on("disconnect", reason => {
+    cancelResignDialog();
     cancelConnectionTimers();
     sessionReplaced = reason === "io server disconnect";
     roomExitAction = null;
@@ -936,8 +955,23 @@ function registerRoomControls() {
   }
   $("play-again").addEventListener("click", () => exitResult("new-room"));
   $("return-lobby").addEventListener("click", () => exitResult("lobby"));
+  const resignDialog = $("resign-dialog");
   $("leave-room").addEventListener("click", () => {
-    if (socket?.connected) socket.emit(onlineGameActive ? "resignGame" : "leaveRoom");
+    if (!socket?.connected) return;
+    if (!onlineGameActive) {
+      socket.emit("leaveRoom");
+      return;
+    }
+    if (!resignDialog.open) {
+      updateResignMessage();
+      resignDialog.returnValue = "cancel";
+      resignDialog.showModal();
+    }
+  });
+  resignDialog.addEventListener("close", () => {
+    if (resignDialog.returnValue === "resign" && socket?.connected && onlineGameActive && !gameOver) {
+      socket.emit("resignGame");
+    }
   });
   $("disconnect-overlay").addEventListener("cancel", event => event.preventDefault());
   $("retry-connection").addEventListener("click", () => {
