@@ -337,6 +337,7 @@ function createRoomState(code, socketId, uid) {
 
     operations: Promise.resolve(),
     closing: false,
+    departedPlayers: new Set(),
     reconnectDeadlines: { black: null, white: null },
     createdAt: Date.now(),
     lastMoveAt: null
@@ -923,7 +924,17 @@ function leaveCurrentRoom(socket) {
   if (room) {
     socket.leave(room.code);
     socketRooms.delete(socket.id);
-    closeRoom(room, "O adversário saiu. A partida foi encerrada.");
+    if (room.gameOver) {
+      const color = getPlayerColor(room, socket.id);
+      if (color) {
+        room.players[color] = null;
+        room.departedPlayers.add(color);
+      }
+      // Keep player UIDs until settlement has resolved the winner.
+      if (room.departedPlayers.size === 2) closeRoom(room, "A sala foi encerrada.");
+    } else {
+      closeRoom(room, "O adversário saiu. A partida foi encerrada.");
+    }
   }
   recentAbandonments.delete(socket.data.uid);
   socket.emit("roomLeft", { message: "Você saiu da sala." });
@@ -1060,7 +1071,7 @@ function resumeRoomForSocket(socket) {
       color = WHITE;
     }
 
-    if (!color) continue;
+    if (!color || room.departedPlayers.has(color)) continue;
     expireReconnects(room);
     if (room.closing) continue;
 
