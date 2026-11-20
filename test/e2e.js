@@ -332,6 +332,14 @@ async function main() {
   assert.equal(await white.page.locator("#board .cell").first().getAttribute("data-row"), "0");
   await waitText(black.page.locator("#upper-player .player-tag"), /Vez do adversário/);
   await waitText(white.page.locator("#lower-player .player-tag"), /Sua vez/);
+  for (const [badge, turn, color] of [
+    [black.page.locator("#upper-player .player-tag"), "opponent", "rgb(255, 88, 106)"],
+    [white.page.locator("#lower-player .player-tag"), "self", "rgb(83, 255, 137)"]
+  ]) {
+    await badge.waitFor({ state: "visible" });
+    assert.equal(await badge.getAttribute("data-turn"), turn);
+    assert.equal(await badge.evaluate(el => getComputedStyle(el, "::before").backgroundColor), color);
+  }
   await waitText(black.page.locator("#white-player"), /Luz d’Ávila/);
   await waitText(white.page.locator("#black-player"), /Águia Azul/);
   await setNickname(white.page, "Dama da Serra", /Apelido salvo/);

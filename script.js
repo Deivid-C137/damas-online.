@@ -439,6 +439,7 @@ const betStatusElement = $("bet-status");
         : "Partida local";
       card.classList.toggle("active-turn", active);
       badge.hidden = !onlineRoomCode || !active;
+      badge.dataset.turn = isSelf ? "self" : "opponent";
       badge.textContent = isSelf ? "Sua vez" : "Vez do adversário";
     }
   }
