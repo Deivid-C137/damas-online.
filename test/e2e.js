@@ -313,6 +313,8 @@ async function main() {
   await waitText(black.page.locator("#arena-result-reason"), /As brancas desistiram/);
   await black.page.locator("#arena-result-credit").waitFor({ state: "hidden" });
   await black.page.locator("#play-again").click();
+  await white.page.locator("#arena-result").waitFor({ state: "visible" });
+  await white.page.locator("#return-lobby").click();
   const newCode = await eventually(async () => {
     const value = await black.page.locator("#room-code").inputValue();
     assert.match(value, /^[A-Z0-9]{6}$/);
@@ -446,21 +448,36 @@ async function main() {
   console.log("OK: cadastro, login, carteira, foco, aposta restaurada, reconexão, partida completa, falha temporária e prêmio pago no retry.");
 
   await black.page.locator("#return-lobby").click();
+  await white.page.locator("#arena-result").waitFor({ state: "visible" });
+  await white.page.locator("#return-lobby").click();
   await white.page.locator("#arena-result").waitFor({ state: "hidden" });
   const resigned = await createRoom(black.page, white.page);
   await propose(black.page, white.page);
   await accept(white.page);
   const reserved = await assertBet(resigned, "reserved");
   assert.equal(await white.page.locator("#leave-room").innerText(), "Desistir");
-  await white.page.locator("#leave-room").evaluate(button => {
-    button.click();
-    button.click();
-  });
-  await waitText(black.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
-  await waitText(white.page.locator("#status"), /As brancas desistiram/);
+  const resignBlocker = await pool.connect();
+  try {
+    await resignBlocker.query("BEGIN");
+    await resignBlocker.query("LOCK TABLE public.bet_transactions IN ACCESS EXCLUSIVE MODE");
+    await white.page.locator("#leave-room").evaluate(button => {
+      button.click();
+      button.click();
+    });
+    await waitText(black.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
+    await waitText(white.page.locator("#status"), /As brancas desistiram/);
+    await white.page.locator("#return-lobby").click();
+    await white.page.locator("#arena-result").waitFor({ state: "hidden" });
+    await black.page.locator("#arena-result").waitFor({ state: "visible" });
+    await waitText(black.page.locator("#arena-result-credit"), /Liquidação pendente/);
+  } finally {
+    await resignBlocker.query("ROLLBACK");
+    resignBlocker.release();
+  }
   await assertAbandonmentPayout(resigned, reserved.creator_uid);
+  await waitText(black.page.locator("#arena-result-credit"), /Prêmio pago ao vencedor: 9,50 créditos/);
   await black.page.locator("#return-lobby").click();
-  await white.page.locator("#arena-result").waitFor({ state: "hidden" });
+  await black.page.locator("#arena-result").waitFor({ state: "hidden" });
   console.log("OK: desistência imediata pagou o adversário uma única vez.");
 
   const expired = await createRoom(black.page, white.page);
