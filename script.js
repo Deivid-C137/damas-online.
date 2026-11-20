@@ -610,8 +610,8 @@ const betStatusElement = $("bet-status");
       return;
     }
 
-    onlineRoomCode = code;
-    roomCodeInput.value = code;
+    onlineRoomCode = payload.roomReleased ? null : code;
+    roomCodeInput.value = onlineRoomCode || "";
     if (payload.color === BLACK || payload.color === WHITE) onlinePlayerColor = payload.color;
     if (!onlinePlayerColor) return;
 
@@ -621,7 +621,7 @@ const betStatusElement = $("bet-status");
     capturedThisTurn = Array.isArray(payload.capturedThisTurn) ? payload.capturedThisTurn : [];
     gameOver = Boolean(payload.gameOver);
     if (gameOver) cancelResignDialog();
-    onlineResult = gameOver ? { winner: payload.winner, reason: payload.resultReason || payload.message || "" } : null;
+    onlineResult = gameOver ? { code, winner: payload.winner, reason: payload.resultReason || payload.message || "" } : null;
     movePending = false;
     onlineGameActive = Boolean(payload.started) && !gameOver;
     opponentConnected = Boolean(payload.players?.[onlinePlayerColor === WHITE ? BLACK : WHITE]);
@@ -639,7 +639,7 @@ const betStatusElement = $("bet-status");
     updatePlayerCards();
     renderBet();
 
-    setRoomInfo(onlineGameActive
+    setRoomInfo(payload.roomReleased ? "Sala encerrada. Você já pode iniciar outra partida." : onlineGameActive
       ? `Sala ${code} · ${opponentConnected ? "Partida em andamento" : "Aguardando reconexão do adversário"}.`
       : `Sala ${code}.`);
     const message = payload.message || (gameOver
@@ -665,7 +665,7 @@ const betStatusElement = $("bet-status");
       socket = null;
     }
 
-    if (onlineRoomCode) clearOnlineRoom();
+    if (onlineRoomCode || onlineResult) clearOnlineRoom();
     $("profile-nickname").value = "";
     $("profile-message").textContent = "";
     $("profile-save").disabled = true;
@@ -930,7 +930,7 @@ function registerSocketEvents() {
     });
 
     socket.on("bet:response", data => {
-      if (!onlineBet || onlineBet.id !== data.id || data.code !== onlineRoomCode) return;
+      if (!onlineBet || onlineBet.id !== data.id || data.code !== (onlineRoomCode || onlineResult?.code)) return;
       onlineBet = { ...onlineBet, ...data };
       renderBet();
       betStatusElement.textContent = data.message;

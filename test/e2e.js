@@ -323,9 +323,11 @@ async function main() {
   const waiting = white.page.getByRole("dialog", { name: "Adversário desconectado" });
   await waiting.getByRole("button", { name: "Desistir da partida" }).click();
   await resignDialog.waitFor({ state: "visible" });
-  await black.setOffline(false);
-  await waitText(black.page.locator("#room-info"), /Partida em andamento/);
   await resignDialog.getByRole("button", { name: "Confirmar desistência" }).click();
+  await waitText(white.page.locator("#room-info"), /Sala encerrada/);
+  assert.equal((await readHealth(port)).activeRooms, 0);
+  await black.setOffline(false);
+  await waitText(black.page.locator("#room-info"), /Sala encerrada/);
   await black.page.locator("#arena-result").waitFor({ state: "visible" });
   await waitText(black.page.locator("#arena-result-reason"), /As brancas desistiram/);
   await black.page.locator("#arena-result-credit").waitFor({ state: "hidden" });
@@ -483,6 +485,12 @@ async function main() {
     await resignDialog.getByRole("button", { name: "Confirmar desistência" }).click();
     await waitText(black.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
     await waitText(white.page.locator("#status"), /As brancas desistiram/);
+    for (const player of [black, white]) {
+      await waitText(player.page.locator("#room-info"), /Sala encerrada/);
+      await player.page.locator("#arena-result").waitFor({ state: "visible" });
+    }
+    const health = await readHealth(port);
+    assert.equal(health.activeRooms, 0);
     await white.page.locator("#return-lobby").click();
     await white.page.locator("#arena-result").waitFor({ state: "hidden" });
     await black.page.locator("#arena-result").waitFor({ state: "visible" });
