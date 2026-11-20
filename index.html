@@ -174,31 +174,7 @@
         <!-- JOGADORES DA PARTIDA -->
         <section class="panel match-panel">
           <span class="eyebrow">PARTIDA ATUAL</span>
-          <h2>Jogadores</h2>
-
-          <div id="black-card" class="player player-black">
-            <div class="player-piece black-piece" aria-hidden="true"></div>
-
-            <div class="player-details">
-              <strong>Pretas</strong>
-              <p id="black-player">Aguardando jogador</p>
-            </div>
-
-            <span class="player-tag">P1</span>
-          </div>
-
-          <div class="versus" aria-hidden="true">VS</div>
-
-          <div id="white-card" class="player player-white">
-            <div class="player-piece white-piece" aria-hidden="true"></div>
-
-            <div class="player-details">
-              <strong>Brancas</strong>
-              <p id="white-player">Aguardando jogador</p>
-            </div>
-
-            <span class="player-tag">P2</span>
-          </div>
+          <h2>Controles</h2>
 
           <div class="match-tip">
             <span aria-hidden="true">✦</span>
@@ -305,6 +281,7 @@
           </div>
         </div>
 
+        <span id="arena-turn-announcement" class="arena-sr-only" role="status"></span>
         <!-- INDICADOR DE TURNO -->
         <div
           id="turn-banner"
@@ -323,6 +300,36 @@
           </div>
         </div>
 
+        <section id="arena-result" class="arena-result" aria-labelledby="arena-result-title" hidden>
+          <div role="status">
+            <h3 id="arena-result-title"></h3>
+            <p id="arena-result-reason"></p>
+            <p id="arena-result-credit" class="arena-result-credit" hidden></p>
+          </div>
+          <div class="arena-result-actions">
+            <button id="play-again" class="btn btn-primary" type="button">Criar nova partida</button>
+            <button id="return-lobby" class="btn btn-secondary" type="button">Voltar ao lobby</button>
+          </div>
+        </section>
+        <section id="arena-bet" class="arena-bet" aria-label="Aposta aceita" hidden>
+          <strong>Aposta aceita</strong>
+          <dl>
+            <div><dt>Por jogador</dt><dd id="arena-stake"></dd></div>
+            <div><dt>Prêmio líquido</dt><dd id="arena-prize"></dd></div>
+          </dl>
+        </section>
+        <div id="upper-player" class="arena-player-slot">
+          <div id="black-card" class="player player-black">
+            <div class="player-piece black-piece" aria-hidden="true"></div>
+
+            <div class="player-details">
+              <strong>Pretas</strong>
+              <p id="black-player">Aguardando jogador</p>
+            </div>
+
+            <span class="player-tag" hidden></span>
+          </div>
+        </div>
         <!-- TABULEIRO GERADO PELO SCRIPT.JS -->
         <div class="board-frame">
           <div
@@ -330,6 +337,19 @@
             aria-label="Tabuleiro de damas"
             role="group"
           ></div>
+        </div>
+
+        <div id="lower-player" class="arena-player-slot">
+          <div id="white-card" class="player player-white">
+            <div class="player-piece white-piece" aria-hidden="true"></div>
+
+            <div class="player-details">
+              <strong>Brancas</strong>
+              <p id="white-player">Aguardando jogador</p>
+            </div>
+
+            <span class="player-tag" hidden></span>
+          </div>
         </div>
 
         <!-- LEGENDA -->

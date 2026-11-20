@@ -12,6 +12,7 @@ A migração inicial é reaplicável. Em banco existente, revise o esquema antes
 
 ## Regras e dados do jogador
 
+- Na partida online, o tabuleiro fica entre o adversário e o jogador. O painel mostra o turno, o prêmio líquido de uma aposta aceita e o valor confirmado após a liquidação. No fim, é possível voltar ao lobby ou criar uma nova sala com um novo convite.
 - As brancas começam. O mesmo motor valida os modos local e online. É obrigatório seguir um trajeto que capture o maior número de peças, inclusive durante a sequência. Trajetos empatados são permitidos. Peças simples capturam para frente e para trás, damas percorrem a diagonal, peças capturadas bloqueiam a diagonal até o final da sequência e a promoção ocorre no fim da jogada.
 - A partida tem vitória por falta de peças ou de jogadas e empate automático na terceira ocorrência da mesma posição com o mesmo lado a jogar.
 - A partida pausa quando um jogador cai. Ele tem 2 minutos para reconectar. Se, no vencimento do prazo, apenas o adversário estiver conectado, o adversário vence por abandono e recebe o prêmio normal da aposta aceita.

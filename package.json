@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/rules.test.js test/nicknames.test.js",
+    "test": "node --test test/rules.test.js test/nicknames.test.js test/settlement.test.js",
     "migrate": "node db/migrate.js",
     "test:e2e": "node test/e2e.js"
   },

@@ -89,12 +89,17 @@ async function account(index, waitForBalance = true) {
   const context = await browser.newContext();
   await context.route("**/*", route => {
     const url = new URL(route.request().url());
+    // Keep one observable transport so dropping both endpoints cannot wait for a polling heartbeat.
+    if (url.origin === origin && url.pathname === "/socket.io/" &&
+        url.searchParams.get("transport") === "polling") return route.abort();
     if ([origin, `http://${emulator}`].includes(url.origin)) return route.continue();
     return route.abort();
   });
   const incoming = [];
   let transport;
+  let offline = false;
   await context.routeWebSocket(wsUrl => wsUrl.host === new URL(origin).host && wsUrl.pathname === "/socket.io/", route => {
+    if (offline) return route.close();
     const upstream = route.connectToServer();
     transport = { route, upstream };
     upstream.onMessage(message => {
@@ -103,15 +108,15 @@ async function account(index, waitForBalance = true) {
     });
   });
   const page = await context.newPage();
-  async function setOffline(offline) {
-    await context.setOffline(offline);
-    // Chromium can keep an established WebSocket open under offline emulation.
-    // Close the real transport explicitly to reproduce the network loss on both ends.
-    if (offline && transport) {
+  async function setOffline(disconnected) {
+    offline = disconnected;
+    if (offline) {
+      await eventually(() => assert.ok(transport));
       const { route, upstream } = transport;
       transport = null;
-      await Promise.allSettled([route.close(), upstream.close()]);
+      await Promise.allSettled([upstream.close(), route.close()]);
     }
+    await context.setOffline(offline);
   }
   const email = `damas-${Date.now()}-${index}@example.invalid`;
   await page.goto(origin);
@@ -301,7 +306,32 @@ async function main() {
   await lobbyExit.click();
   await lobbyExit.waitFor({ state: "hidden" });
 
+  const unbet = await createRoom(black.page, white.page);
+  await black.page.locator("#arena-bet").waitFor({ state: "hidden" });
+  await white.page.locator("#leave-room").click();
+  await black.page.locator("#arena-result").waitFor({ state: "visible" });
+  await waitText(black.page.locator("#arena-result-reason"), /As brancas desistiram/);
+  await black.page.locator("#arena-result-credit").waitFor({ state: "hidden" });
+  await black.page.locator("#play-again").click();
+  const newCode = await eventually(async () => {
+    const value = await black.page.locator("#room-code").inputValue();
+    assert.match(value, /^[A-Z0-9]{6}$/);
+    assert.notEqual(value, unbet);
+    return value;
+  });
+  await waitText(black.page.locator("#room-info"), new RegExp(newCode));
+  await black.page.locator("#leave-room").click();
+  await black.page.locator("#leave-room").waitFor({ state: "hidden" });
+
   const code = await createRoom(black.page, white.page);
+  assert.equal(await black.page.locator("#upper-player #white-card").count(), 1);
+  assert.equal(await black.page.locator("#lower-player #black-card").count(), 1);
+  assert.equal(await white.page.locator("#upper-player #black-card").count(), 1);
+  assert.equal(await white.page.locator("#lower-player #white-card").count(), 1);
+  assert.equal(await black.page.locator("#board .cell").first().getAttribute("data-row"), "7");
+  assert.equal(await white.page.locator("#board .cell").first().getAttribute("data-row"), "0");
+  await waitText(black.page.locator("#upper-player .player-tag"), /Vez do adversário/);
+  await waitText(white.page.locator("#lower-player .player-tag"), /Sua vez/);
   await waitText(black.page.locator("#white-player"), /Luz d’Ávila/);
   await waitText(white.page.locator("#black-player"), /Águia Azul/);
   await setNickname(white.page, "Dama da Serra", /Apelido salvo/);
@@ -323,6 +353,19 @@ async function main() {
   await accept(white.page);
   await waitText(black.page.locator("#wallet-balance"), /495/);
   await waitText(white.page.locator("#wallet-balance"), /495/);
+  for (const { page } of [black, white]) {
+    await page.locator("#arena-bet").waitFor({ state: "visible" });
+    await waitText(page.locator("#arena-stake"), /^5,00 créditos$/);
+    await waitText(page.locator("#arena-prize"), /^9,50 créditos$/);
+  }
+  if (process.env.DAMAS_ARENA_SCREENSHOT) {
+    await black.page.screenshot({ path: process.env.DAMAS_ARENA_SCREENSHOT, fullPage: true });
+    await white.page.setViewportSize({ width: 390, height: 760 });
+    assert.ok(await white.page.locator("#arena-bet").isVisible());
+    assert.equal(await white.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await white.page.screenshot({ path: process.env.DAMAS_ARENA_SCREENSHOT.replace(/\.png$/, "-mobile.png"), fullPage: true });
+    await white.page.setViewportSize({ width: 1280, height: 720 });
+  }
   assert.equal((await assertBet(code, "reserved")).resolution, null);
 
   await white.setOffline(true);
@@ -372,12 +415,16 @@ async function main() {
     });
     await waitText(black.page.locator("#turn-title"), /VENCERAM/);
     await waitText(black.page.locator("#bet-status"), /Créditos pendentes/);
+    await waitText(black.page.locator("#arena-result-credit"), /Liquidação pendente/);
     assert.equal((await assertBet(code, "reserved")).resolution, "payout");
   } finally {
     await blocker.query("ROLLBACK");
     blocker.release();
   }
   const completed = await assertBet(code, "finished");
+  await waitText(black.page.locator("#arena-result-credit"), /^Prêmio pago ao vencedor: 9,50 créditos$/);
+  await waitText(white.page.locator("#arena-result-credit"), /^Prêmio pago ao vencedor: 9,50 créditos$/);
+  await waitText(black.page.locator("#arena-result-reason"), /peças|jogadas legais/);
   const winnerPage = winner === "black" ? black.page : white.page;
   await waitText(winnerPage.locator("#wallet-balance"), /504[,.]50/);
   const changes = await pool.query(
@@ -389,8 +436,8 @@ async function main() {
   ]);
   console.log("OK: cadastro, login, carteira, foco, aposta restaurada, reconexão, partida completa, falha temporária e prêmio pago no retry.");
 
-  await black.page.locator("#leave-room").click();
-  await white.page.locator("#leave-room").waitFor({ state: "hidden" });
+  await black.page.locator("#return-lobby").click();
+  await white.page.locator("#arena-result").waitFor({ state: "hidden" });
   const resigned = await createRoom(black.page, white.page);
   await propose(black.page, white.page);
   await accept(white.page);
@@ -401,10 +448,10 @@ async function main() {
     button.click();
   });
   await waitText(black.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
-  await waitText(white.page.locator("#status"), /Um jogador desistiu/);
+  await waitText(white.page.locator("#status"), /As brancas desistiram/);
   await assertAbandonmentPayout(resigned, reserved.creator_uid);
-  await black.page.locator("#leave-room").click();
-  await white.page.locator("#leave-room").waitFor({ state: "hidden" });
+  await black.page.locator("#return-lobby").click();
+  await white.page.locator("#arena-result").waitFor({ state: "hidden" });
   console.log("OK: desistência imediata pagou o adversário uma única vez.");
 
   const expired = await createRoom(black.page, white.page);
@@ -418,13 +465,14 @@ async function main() {
   await waitText(black.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
   await overlay.waitFor({ state: "hidden" });
   await assertAbandonmentPayout(expired, expiryBet.creator_uid);
-  await black.page.locator("#leave-room").click();
+  await black.page.locator("#return-lobby").click();
   await white.setOffline(false);
   await waitText(white.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
   await offlineNotice.waitFor({ state: "hidden" });
   await assertAbandonmentPayout(expired, expiryBet.creator_uid);
-  await white.page.locator("#leave-room").click();
-  await white.page.locator("#leave-room").waitFor({ state: "hidden" });
+  await waitText(white.page.locator("#arena-result-credit"), /Prêmio pago ao vencedor: 9,50 créditos/);
+  await white.page.locator("#return-lobby").click();
+  await white.page.locator("#arena-result").waitFor({ state: "hidden" });
   console.log("OK: prazo vencido pagou o jogador conectado e a volta tardia mostrou o resultado.");
 
   const bothOffline = await createRoom(black.page, white.page);
