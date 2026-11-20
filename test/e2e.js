@@ -316,6 +316,15 @@ async function main() {
   await resignDialog.waitFor({ state: "hidden" });
   await waitText(black.page.locator("#room-info"), /Partida em andamento/);
   await white.page.locator("#leave-room").click();
+  await black.setOffline(true);
+  await waitText(white.page.locator("#turn-title"), /AGUARDANDO RECONEXÃO/);
+  await resignDialog.waitFor({ state: "visible" });
+  await resignDialog.getByRole("button", { name: "Continuar jogando" }).click();
+  const waiting = white.page.getByRole("dialog", { name: "Adversário desconectado" });
+  await waiting.getByRole("button", { name: "Desistir da partida" }).click();
+  await resignDialog.waitFor({ state: "visible" });
+  await black.setOffline(false);
+  await waitText(black.page.locator("#room-info"), /Partida em andamento/);
   await resignDialog.getByRole("button", { name: "Confirmar desistência" }).click();
   await black.page.locator("#arena-result").waitFor({ state: "visible" });
   await waitText(black.page.locator("#arena-result-reason"), /As brancas desistiram/);

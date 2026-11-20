@@ -62,6 +62,7 @@ const betStatusElement = $("bet-status");
   let walletBalance = null;
   let bettingAvailable = false;
   let opponentTimer = null;
+  let opponentAlertPending = false;
   let reconnectTimer = null;
   let attemptTimer = null;
   let connectionAttempt = 0;
@@ -534,6 +535,7 @@ const betStatusElement = $("bet-status");
   }
 
   function hideOpponentAlert() {
+    opponentAlertPending = false;
     clearInterval(opponentTimer);
     opponentTimer = null;
     const overlay = $("disconnect-overlay");
@@ -551,8 +553,8 @@ const betStatusElement = $("bet-status");
     const countdown = $("disconnect-countdown");
     const status = $("disconnect-status");
     status.textContent = "Aguardando o adversário voltar.";
-    cancelResignDialog();
-    if (!overlay.open) overlay.showModal();
+    opponentAlertPending = true;
+    if (!overlay.open && !$("resign-dialog").open) overlay.showModal();
 
     if (!Number.isFinite(deadline) || !Number.isFinite(serverTime)) {
       countdown.textContent = "—";
@@ -956,21 +958,25 @@ function registerRoomControls() {
   $("play-again").addEventListener("click", () => exitResult("new-room"));
   $("return-lobby").addEventListener("click", () => exitResult("lobby"));
   const resignDialog = $("resign-dialog");
+  function openResignDialog() {
+    if (!socket?.connected || !onlineGameActive || gameOver || resignDialog.open) return;
+    updateResignMessage();
+    resignDialog.returnValue = "cancel";
+    resignDialog.showModal();
+  }
+
+  $("resign-during-reconnect").addEventListener("click", openResignDialog);
   $("leave-room").addEventListener("click", () => {
     if (!socket?.connected) return;
-    if (!onlineGameActive) {
-      socket.emit("leaveRoom");
-      return;
-    }
-    if (!resignDialog.open) {
-      updateResignMessage();
-      resignDialog.returnValue = "cancel";
-      resignDialog.showModal();
-    }
+    if (onlineGameActive) openResignDialog();
+    else socket.emit("leaveRoom");
   });
   resignDialog.addEventListener("close", () => {
     if (resignDialog.returnValue === "resign" && socket?.connected && onlineGameActive && !gameOver) {
       socket.emit("resignGame");
+    } else if (opponentAlertPending && socket?.connected && onlineGameActive && !gameOver) {
+      const overlay = $("disconnect-overlay");
+      if (!overlay.open) overlay.showModal();
     }
   });
   $("disconnect-overlay").addEventListener("cancel", event => event.preventDefault());
