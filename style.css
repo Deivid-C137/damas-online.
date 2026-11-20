@@ -1251,6 +1251,33 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
   font-size: .76rem;
   text-align: center;
 }
+.arena-player-slot .player-tag:not([hidden]) {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+}
+.arena-player-slot .player-tag::before {
+  content: "";
+  flex: 0 0 .55rem;
+  width: .55rem;
+  height: .55rem;
+  border-radius: 50%;
+  background: var(--turn-led);
+  box-shadow: 0 0 .45rem var(--turn-led);
+}
+.arena-player-slot .player-tag[data-turn="self"] {
+  --turn-led: #53ff89;
+  color: #b6ffd0;
+  background: #16362b;
+}
+.arena-player-slot .player-tag[data-turn="opponent"] {
+  --turn-led: #ff586a;
+  color: #ffd0d6;
+  background: #44212e;
+}
+@media (forced-colors: active) {
+  .arena-player-slot .player-tag::before { background: CanvasText; }
+}
 .arena-bet, .arena-result {
   padding: .85rem 1rem;
   margin-block: .75rem;
