@@ -339,6 +339,7 @@ async function main() {
     await badge.waitFor({ state: "visible" });
     assert.equal(await badge.getAttribute("data-turn"), turn);
     assert.equal(await badge.evaluate(el => getComputedStyle(el, "::before").backgroundColor), color);
+    assert.equal(await badge.evaluate(el => getComputedStyle(el.closest(".player")).borderTopColor), color);
   }
   await waitText(black.page.locator("#white-player"), /Luz d’Ávila/);
   await waitText(white.page.locator("#black-player"), /Águia Azul/);

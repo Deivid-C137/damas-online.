@@ -1265,13 +1265,18 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
   background: var(--turn-led);
   box-shadow: 0 0 .45rem var(--turn-led);
 }
+.arena-player-slot .active-turn:has(.player-tag[data-turn]:not([hidden])) {
+  border-color: var(--turn-led);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--turn-led) 30%, transparent),
+    0 0 20px color-mix(in srgb, var(--turn-led) 20%, transparent);
+}
+.arena-player-slot .player:has(.player-tag[data-turn="self"]) { --turn-led: #53ff89; }
+.arena-player-slot .player:has(.player-tag[data-turn="opponent"]) { --turn-led: #ff586a; }
 .arena-player-slot .player-tag[data-turn="self"] {
-  --turn-led: #53ff89;
   color: #b6ffd0;
   background: #16362b;
 }
 .arena-player-slot .player-tag[data-turn="opponent"] {
-  --turn-led: #ff586a;
   color: #ffd0d6;
   background: #44212e;
 }
