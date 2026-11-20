@@ -69,6 +69,7 @@ const betStatusElement = $("bet-status");
   let sessionReplaced = false;
 
   let onlineRoomCode = null;
+  let onlineMatchVersion = 0;
   let onlinePlayerColor = null;
   let onlineGameActive = false;
   let roomControlsRegistered = false;
@@ -616,6 +617,7 @@ const betStatusElement = $("bet-status");
     if (!onlinePlayerColor) return;
 
     board = normalized;
+    onlineMatchVersion = payload.matchVersion ?? 0;
     turn = payload.turn === BLACK ? BLACK : WHITE;
     mustContinue = payload.mustContinue || null;
     capturedThisTurn = Array.isArray(payload.capturedThisTurn) ? payload.capturedThisTurn : [];
@@ -1109,6 +1111,7 @@ function registerBetControls() {
     movePending = true;
 
     socket.emit("moveAttempt", {
+      matchVersion: onlineMatchVersion,
       from: {
         r: move.from.row,
         c: move.from.col

@@ -372,15 +372,31 @@ async function main() {
   }
   console.log("OK: moderação, edição pública e e-mail restrito ao perfil privado.");
 
+  const boardLabels = page => page.locator("#board .cell").evaluateAll(cells => cells.map(cell => cell.getAttribute("aria-label")));
+  const initialBoards = await Promise.all([boardLabels(black.page), boardLabels(white.page)]);
+  const from = cell(white.page, 5, 0);
+  const to = cell(white.page, 4, 1);
+  await from.click();
+  await to.click();
+  await eventually(async () => assert.match(await cell(black.page, 4, 1).getAttribute("aria-label"), /Peça branca/));
+  const friendlyBoard = await boardLabels(black.page);
+  assert.notDeepEqual(friendlyBoard, initialBoards[0]);
+
   await propose(black.page, white.page);
+  assert.deepEqual(await boardLabels(black.page), friendlyBoard);
   await white.page.locator("#bet-decline").click();
   await waitText(black.page.locator("#bet-status"), /refusada|recusada/);
+  assert.deepEqual(await boardLabels(black.page), friendlyBoard);
   await propose(black.page, white.page);
   await white.page.reload();
   await eventually(async () => assert.equal(await white.page.locator("#profile-nickname").inputValue(), "Dama da Serra"));
   await waitText(white.page.locator("#black-player"), /Águia Azul/);
   await white.page.locator("#bet-accept").waitFor({ state: "visible" });
   await accept(white.page);
+  await eventually(async () => {
+    assert.deepEqual(await Promise.all([boardLabels(black.page), boardLabels(white.page)]), initialBoards);
+    assert.equal(await white.page.locator("#lower-player .player-tag").innerText(), "Sua vez");
+  });
   await waitText(black.page.locator("#wallet-balance"), /495/);
   await waitText(white.page.locator("#wallet-balance"), /495/);
   for (const { page } of [black, white]) {
