@@ -316,7 +316,18 @@ async function main() {
   await resignDialog.waitFor({ state: "hidden" });
   await waitText(black.page.locator("#room-info"), /Partida em andamento/);
   await white.page.locator("#leave-room").click();
+  await black.setOffline(true);
+  await waitText(white.page.locator("#turn-title"), /AGUARDANDO RECONEXÃO/);
+  await resignDialog.waitFor({ state: "visible" });
+  await resignDialog.getByRole("button", { name: "Continuar jogando" }).click();
+  const waiting = white.page.getByRole("dialog", { name: "Adversário desconectado" });
+  await waiting.getByRole("button", { name: "Desistir da partida" }).click();
+  await resignDialog.waitFor({ state: "visible" });
   await resignDialog.getByRole("button", { name: "Confirmar desistência" }).click();
+  await waitText(white.page.locator("#room-info"), /Sala encerrada/);
+  assert.equal((await readHealth(port)).activeRooms, 0);
+  await black.setOffline(false);
+  await waitText(black.page.locator("#room-info"), /Sala encerrada/);
   await black.page.locator("#arena-result").waitFor({ state: "visible" });
   await waitText(black.page.locator("#arena-result-reason"), /As brancas desistiram/);
   await black.page.locator("#arena-result-credit").waitFor({ state: "hidden" });
@@ -361,15 +372,31 @@ async function main() {
   }
   console.log("OK: moderação, edição pública e e-mail restrito ao perfil privado.");
 
+  const boardLabels = page => page.locator("#board .cell").evaluateAll(cells => cells.map(cell => cell.getAttribute("aria-label")));
+  const initialBoards = await Promise.all([boardLabels(black.page), boardLabels(white.page)]);
+  const from = cell(white.page, 5, 0);
+  const to = cell(white.page, 4, 1);
+  await from.click();
+  await to.click();
+  await eventually(async () => assert.match(await cell(black.page, 4, 1).getAttribute("aria-label"), /Peça branca/));
+  const friendlyBoard = await boardLabels(black.page);
+  assert.notDeepEqual(friendlyBoard, initialBoards[0]);
+
   await propose(black.page, white.page);
+  assert.deepEqual(await boardLabels(black.page), friendlyBoard);
   await white.page.locator("#bet-decline").click();
   await waitText(black.page.locator("#bet-status"), /refusada|recusada/);
+  assert.deepEqual(await boardLabels(black.page), friendlyBoard);
   await propose(black.page, white.page);
   await white.page.reload();
   await eventually(async () => assert.equal(await white.page.locator("#profile-nickname").inputValue(), "Dama da Serra"));
   await waitText(white.page.locator("#black-player"), /Águia Azul/);
   await white.page.locator("#bet-accept").waitFor({ state: "visible" });
   await accept(white.page);
+  await eventually(async () => {
+    assert.deepEqual(await Promise.all([boardLabels(black.page), boardLabels(white.page)]), initialBoards);
+    assert.equal(await white.page.locator("#lower-player .player-tag").innerText(), "Sua vez");
+  });
   await waitText(black.page.locator("#wallet-balance"), /495/);
   await waitText(white.page.locator("#wallet-balance"), /495/);
   for (const { page } of [black, white]) {
@@ -474,6 +501,12 @@ async function main() {
     await resignDialog.getByRole("button", { name: "Confirmar desistência" }).click();
     await waitText(black.page.locator("#turn-title"), /PRETAS VENCERAM POR ABANDONO/);
     await waitText(white.page.locator("#status"), /As brancas desistiram/);
+    for (const player of [black, white]) {
+      await waitText(player.page.locator("#room-info"), /Sala encerrada/);
+      await player.page.locator("#arena-result").waitFor({ state: "visible" });
+    }
+    const health = await readHealth(port);
+    assert.equal(health.activeRooms, 0);
     await white.page.locator("#return-lobby").click();
     await white.page.locator("#arena-result").waitFor({ state: "hidden" });
     await black.page.locator("#arena-result").waitFor({ state: "visible" });

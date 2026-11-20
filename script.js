@@ -62,12 +62,14 @@ const betStatusElement = $("bet-status");
   let walletBalance = null;
   let bettingAvailable = false;
   let opponentTimer = null;
+  let opponentAlertPending = false;
   let reconnectTimer = null;
   let attemptTimer = null;
   let connectionAttempt = 0;
   let sessionReplaced = false;
 
   let onlineRoomCode = null;
+  let onlineMatchVersion = 0;
   let onlinePlayerColor = null;
   let onlineGameActive = false;
   let roomControlsRegistered = false;
@@ -534,6 +536,7 @@ const betStatusElement = $("bet-status");
   }
 
   function hideOpponentAlert() {
+    opponentAlertPending = false;
     clearInterval(opponentTimer);
     opponentTimer = null;
     const overlay = $("disconnect-overlay");
@@ -551,8 +554,8 @@ const betStatusElement = $("bet-status");
     const countdown = $("disconnect-countdown");
     const status = $("disconnect-status");
     status.textContent = "Aguardando o adversário voltar.";
-    cancelResignDialog();
-    if (!overlay.open) overlay.showModal();
+    opponentAlertPending = true;
+    if (!overlay.open && !$("resign-dialog").open) overlay.showModal();
 
     if (!Number.isFinite(deadline) || !Number.isFinite(serverTime)) {
       countdown.textContent = "—";
@@ -608,18 +611,19 @@ const betStatusElement = $("bet-status");
       return;
     }
 
-    onlineRoomCode = code;
-    roomCodeInput.value = code;
+    onlineRoomCode = payload.roomReleased ? null : code;
+    roomCodeInput.value = onlineRoomCode || "";
     if (payload.color === BLACK || payload.color === WHITE) onlinePlayerColor = payload.color;
     if (!onlinePlayerColor) return;
 
     board = normalized;
+    onlineMatchVersion = payload.matchVersion ?? 0;
     turn = payload.turn === BLACK ? BLACK : WHITE;
     mustContinue = payload.mustContinue || null;
     capturedThisTurn = Array.isArray(payload.capturedThisTurn) ? payload.capturedThisTurn : [];
     gameOver = Boolean(payload.gameOver);
     if (gameOver) cancelResignDialog();
-    onlineResult = gameOver ? { winner: payload.winner, reason: payload.resultReason || payload.message || "" } : null;
+    onlineResult = gameOver ? { code, winner: payload.winner, reason: payload.resultReason || payload.message || "" } : null;
     movePending = false;
     onlineGameActive = Boolean(payload.started) && !gameOver;
     opponentConnected = Boolean(payload.players?.[onlinePlayerColor === WHITE ? BLACK : WHITE]);
@@ -637,7 +641,7 @@ const betStatusElement = $("bet-status");
     updatePlayerCards();
     renderBet();
 
-    setRoomInfo(onlineGameActive
+    setRoomInfo(payload.roomReleased ? "Sala encerrada. Você já pode iniciar outra partida." : onlineGameActive
       ? `Sala ${code} · ${opponentConnected ? "Partida em andamento" : "Aguardando reconexão do adversário"}.`
       : `Sala ${code}.`);
     const message = payload.message || (gameOver
@@ -663,7 +667,7 @@ const betStatusElement = $("bet-status");
       socket = null;
     }
 
-    if (onlineRoomCode) clearOnlineRoom();
+    if (onlineRoomCode || onlineResult) clearOnlineRoom();
     $("profile-nickname").value = "";
     $("profile-message").textContent = "";
     $("profile-save").disabled = true;
@@ -928,7 +932,7 @@ function registerSocketEvents() {
     });
 
     socket.on("bet:response", data => {
-      if (!onlineBet || onlineBet.id !== data.id || data.code !== onlineRoomCode) return;
+      if (!onlineBet || onlineBet.id !== data.id || data.code !== (onlineRoomCode || onlineResult?.code)) return;
       onlineBet = { ...onlineBet, ...data };
       renderBet();
       betStatusElement.textContent = data.message;
@@ -956,21 +960,25 @@ function registerRoomControls() {
   $("play-again").addEventListener("click", () => exitResult("new-room"));
   $("return-lobby").addEventListener("click", () => exitResult("lobby"));
   const resignDialog = $("resign-dialog");
+  function openResignDialog() {
+    if (!socket?.connected || !onlineGameActive || gameOver || resignDialog.open) return;
+    updateResignMessage();
+    resignDialog.returnValue = "cancel";
+    resignDialog.showModal();
+  }
+
+  $("resign-during-reconnect").addEventListener("click", openResignDialog);
   $("leave-room").addEventListener("click", () => {
     if (!socket?.connected) return;
-    if (!onlineGameActive) {
-      socket.emit("leaveRoom");
-      return;
-    }
-    if (!resignDialog.open) {
-      updateResignMessage();
-      resignDialog.returnValue = "cancel";
-      resignDialog.showModal();
-    }
+    if (onlineGameActive) openResignDialog();
+    else socket.emit("leaveRoom");
   });
   resignDialog.addEventListener("close", () => {
     if (resignDialog.returnValue === "resign" && socket?.connected && onlineGameActive && !gameOver) {
       socket.emit("resignGame");
+    } else if (opponentAlertPending && socket?.connected && onlineGameActive && !gameOver) {
+      const overlay = $("disconnect-overlay");
+      if (!overlay.open) overlay.showModal();
     }
   });
   $("disconnect-overlay").addEventListener("cancel", event => event.preventDefault());
@@ -1103,6 +1111,7 @@ function registerBetControls() {
     movePending = true;
 
     socket.emit("moveAttempt", {
+      matchVersion: onlineMatchVersion,
       from: {
         r: move.from.row,
         c: move.from.col

@@ -290,6 +290,7 @@ function roomSnapshot(room) {
   return {
     code: room.code,
     board: cloneBoard(room.board),
+    matchVersion: room.matchVersion,
     turn: room.turn,
     mustContinue: room.mustContinue
       ? { ...room.mustContinue }
@@ -298,6 +299,7 @@ function roomSnapshot(room) {
     gameOver: room.gameOver,
     winner: room.winner,
     resultReason: room.resultReason,
+    roomReleased: Boolean(room.releasedAfterResignation),
     ...(room.resultMessage && { message: room.resultMessage }),
     started: room.started,
     bet: betSnapshot(room),
@@ -316,6 +318,7 @@ function createRoomState(code, socketId, uid) {
   return {
     code,
     ...createMatch(),
+    matchVersion: 0,
     nicknames: { black: null, white: null },
 
     players: {
@@ -677,8 +680,11 @@ async function publishSettlement(room, result) {
   room.bet.status = result.status;
   room.bet.payout = result.payout;
   room.bet.refund = result.refund;
-  if (!room.closing) {
-    io.to(room.code).emit("bet:response", {
+  const recipients = room.releasedAfterResignation
+    ? Object.values(room.playerUids).flatMap(uid => [...(userSockets.get(uid) || [])])
+    : [room.code];
+  if (!room.closing && recipients.length) {
+    io.to(recipients).emit("bet:response", {
       ...betSnapshot(room),
       code: room.code,
       message: result.payout
@@ -806,16 +812,19 @@ function endByAbandonment(room, winner, cause) {
   const side = winner === WHITE ? "As brancas" : "As pretas";
   const losingSide = winner === WHITE ? "As pretas" : "As brancas";
   const reason = cause === "resigned" ? `${losingSide} desistiram.` : `${losingSide} não voltaram a tempo.`;
+  room.releasedAfterResignation = cause === "resigned";
   if (!announceGameResult(room, winner, `${side} venceram por abandono. ${reason}`, reason)) return;
 
   for (const color of [BLACK, WHITE]) {
     const uid = room.playerUids[color];
-    if (uid && !room.players[color]) {
+    if (uid && (room.releasedAfterResignation || !room.players[color])) {
       recentAbandonments.delete(uid);
       recentAbandonments.set(uid, { room, color, until: Date.now() + ABANDONMENT_RESULT_MS });
     }
   }
   while (recentAbandonments.size > 500) recentAbandonments.delete(recentAbandonments.keys().next().value);
+
+  if (room.releasedAfterResignation) deleteRoom(room.code);
 
   // Lock in the result immediately, then settle after any bet transaction already in flight.
   void enqueueRoom(room, () => resolveBet(room, winner))
@@ -847,6 +856,11 @@ async function handleMoveAttempt(socket, payload) {
 
   if (!color) {
     emitMoveRejected(socket, "Você não pertence a esta partida.");
+    return;
+  }
+
+  if (payload?.matchVersion != null && payload.matchVersion !== room.matchVersion) {
+    emitMoveRejected(socket, "A partida reiniciou com a aposta. Faça uma nova jogada.");
     return;
   }
 
@@ -978,6 +992,7 @@ function createRoom(socket) {
   room.nicknames.black = socket.data.nickname || null;
   rooms.set(code, room);
   socketRooms.set(socket.id, code);
+  recentAbandonments.delete(socket.data.uid);
   socket.join(code);
 
   socket.emit("roomCreated", {
@@ -1037,6 +1052,7 @@ function joinRoom(socket, payload) {
   room.started = true;
 
   socketRooms.set(socket.id, code);
+  recentAbandonments.delete(socket.data.uid);
   socket.join(code);
 
   socket.emit("roomJoined", {
@@ -1303,12 +1319,20 @@ socket.on("bet:respond", async payload => {
     }
 
     if (!bettingReady) throw new Error("Apostas temporariamente indisponíveis.");
-    const result = await enqueueRoom(room, () =>
-      respondToBet(room, socket.data.uid, payload?.accepted, payload?.betId)
-    );
-
-    io.to(room.code).emit("bet:response", { ...result, ...betSnapshot(room), code: room.code });
-    if (result.accepted) notifyWallets(Object.values(room.playerUids));
+    await enqueueRoom(room, async () => {
+      const result = await respondToBet(room, socket.data.uid, payload?.accepted, payload?.betId);
+      if (result.accepted && !room.gameOver && !room.closing) {
+        Object.assign(room, createMatch());
+        room.matchVersion += 1;
+        room.lastMoveAt = null;
+        io.to(room.code).emit("boardUpdate", {
+          ...roomSnapshot(room),
+          message: "A partida com aposta começou. As brancas jogam primeiro."
+        });
+      }
+      io.to(room.code).emit("bet:response", { ...result, ...betSnapshot(room), code: room.code });
+      if (result.accepted) notifyWallets(Object.values(room.playerUids));
+    });
 
   } catch (error) {
     socket.emit("bet:error", {

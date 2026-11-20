@@ -15,7 +15,7 @@
 
   <!-- Lógica principal do jogo -->
   <script src="/rules.js" defer></script>
-  <script src="/script.js" defer></script>
+  <script src="/script.js?v=restart-on-stake" defer></script>
 </head>
 
 <body>
@@ -414,6 +414,7 @@
     <p id="disconnect-warning" class="disconnect-warning">
       Aguarde. Se o prazo terminar sem que seu adversário volte e você continuar conectado, você vence por abandono.
     </p>
+    <button id="resign-during-reconnect" class="btn btn-secondary" type="button">Desistir da partida</button>
 
   </div>
 </dialog>
