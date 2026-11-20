@@ -384,7 +384,20 @@ async function main() {
 
   await propose(black.page, white.page);
   assert.deepEqual(await boardLabels(black.page), friendlyBoard);
-  await white.page.locator("#bet-decline").click();
+  await white.page.setViewportSize({ width: 390, height: 760 });
+  const challenge = white.page.getByRole("dialog", { name: "Desafio de aposta" });
+  await challenge.waitFor({ state: "visible" });
+  assert.equal(await white.page.locator("#bet-challenge").evaluate(el => el.matches(":modal")), true);
+  assert.equal(await black.page.locator("#bet-challenge").isVisible(), false);
+  const bounds = await challenge.boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= 390 && bounds.y + bounds.height <= 760);
+  await waitText(challenge.locator("#bet-request-message"), /Águia Azul.*5,00 créditos/);
+  await challenge.getByRole("button", { name: "Ver depois" }).click();
+  await challenge.waitFor({ state: "hidden" });
+  await white.page.locator("#bet-challenge-open").click();
+  await challenge.getByRole("button", { name: "Recusar" }).click();
+  await challenge.waitFor({ state: "hidden" });
+  await white.page.setViewportSize({ width: 1280, height: 720 });
   await waitText(black.page.locator("#bet-status"), /refusada|recusada/);
   assert.deepEqual(await boardLabels(black.page), friendlyBoard);
   await propose(black.page, white.page);

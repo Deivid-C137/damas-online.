@@ -1176,34 +1176,7 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
   box-shadow: 0 0 0 2px #a78bfa25;
 }
 
-.bet-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.bet-actions button {
-  flex: 1;
-}
-
-#bet-response-area {
-  margin-top: 15px;
-  padding: 13px;
-  border: 1px solid #59417d;
-  border-radius: 10px;
-  background: #17132a;
-}
-
-#bet-response-area[hidden] {
-  display: none !important;
-}
-
-#bet-request-message {
-  margin: 0;
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.5;
-}
+#bet-challenge-open:not([hidden]) { margin-top: .75rem; }
 
 #bet-status {
   margin-top: 15px;
@@ -1330,3 +1303,88 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+.bet-challenge:not([open]) { display: none; }
+
+.bet-challenge {
+  width: min(29rem, calc(100% - 2rem));
+  max-height: calc(100% - 2rem);
+  padding: 0;
+  overflow: auto;
+  border: 1px solid #ec9550;
+  border-radius: 1.125rem;
+  background: #161320;
+  color: var(--text);
+  box-shadow: 0 1rem 4rem rgb(0 0 0 / 70%), 0 0 2rem rgb(244 127 57 / 18%);
+}
+
+.bet-challenge::backdrop { background: rgb(9 7 16 / 82%); }
+
+.bet-challenge-art {
+  display: flex;
+  position: relative;
+  isolation: isolate;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(.5rem, 4vw, 1.5rem);
+  min-height: 8.5rem;
+  overflow: hidden;
+  background: radial-gradient(ellipse at center, #944229, #24172a 76%);
+  border-bottom: 1px solid #924a3a;
+}
+
+.bet-challenge-art::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -25% -10%;
+  transform: skewY(-12deg);
+  background: repeating-conic-gradient(rgb(255 186 131 / 10%) 0% 25%, transparent 0% 50%) 0 0 / 3rem 3rem;
+  mask-image: radial-gradient(ellipse, #000, transparent 74%);
+}
+
+.bet-challenge-piece {
+  width: clamp(3.25rem, 16vw, 5rem);
+  aspect-ratio: 1;
+  border: .2rem solid;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 .48rem rgb(0 0 0 / 19%), 0 .6rem 0 rgb(25 14 27 / 75%), 0 .9rem 1.1rem rgb(16 7 14 / 70%);
+}
+
+.bet-challenge-piece-dark {
+  transform: rotateX(30deg) rotateY(24deg);
+  border-color: #af92ad;
+  background: radial-gradient(circle at 38% 28%, #55415c, #211721 72%);
+}
+
+.bet-challenge-piece-light {
+  transform: rotateX(30deg) rotateY(-24deg);
+  border-color: #fff0c7;
+  background: radial-gradient(circle at 38% 28%, #fff3cb, #db9753 75%);
+}
+
+.bet-challenge-versus {
+  color: #fff0ce;
+  font-weight: 900;
+  font-style: italic;
+  font-size: 1.8rem;
+  text-shadow: 0 0 1rem #f68147;
+}
+
+.bet-challenge-body { padding: 1.15rem; text-align: center; }
+.bet-challenge-body h2 { margin: 0 0 .55rem; }
+.bet-challenge-body p { margin: .5rem 0; color: #c3b9ce; }
+#bet-request-message { color: #ffd3a2; font-weight: 700; }
+.bet-challenge-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: .55rem; margin-top: 1rem; }
+.bet-challenge-actions .btn { flex: 1; width: auto; }
+.bet-challenge-actions .btn-primary { background: #ffb176; color: #26141b; }
+.bet-challenge-later {
+  margin-top: .65rem;
+  padding: .5rem .75rem;
+  border: 0;
+  background: transparent;
+  color: #decde2;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.bet-challenge button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
