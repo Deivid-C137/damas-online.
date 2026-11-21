@@ -34,7 +34,9 @@ const loginButton = document.getElementById("google-login");
 const logoutButton = document.getElementById("google-logout");
 const loginStatus = document.getElementById("login-status");
 const privateEmail = document.getElementById("login-email");
-const profileForm = document.getElementById("profile-form");
+const profilePanel = document.getElementById("login-panel");
+const profileDialog = document.getElementById("profile-dialog");
+const profileOpen = document.getElementById("profile-open");
 const loginMessage = document.getElementById("login-message");
 
 let mode = "login";
@@ -258,11 +260,14 @@ loginButton.addEventListener("click", () => {
 // Sair da conta
 if (logoutButton) {
   logoutButton.addEventListener("click", async () => {
+    logoutButton.disabled = true;
     try {
       await signOut(auth);
       showMessage("Você saiu da sua conta.");
     } catch (error) {
-      showMessage(errorMessage(error), true);
+      loginMessage.textContent = errorMessage(error);
+    } finally {
+      logoutButton.disabled = false;
     }
   });
 }
@@ -276,28 +281,28 @@ onAuthStateChanged(auth, (user) => {
   if (user) {
     guestMode = false;
     showAuthScreen(false);
-    loginStatus.textContent = "Conectado como Jogador";
-    loginMessage.textContent = "Conta conectada.";
+    loginStatus.textContent = "Conta conectada";
+    profilePanel.toggleAttribute("data-connected", true);
     privateEmail.textContent = user.email || "";
     privateEmail.hidden = !user.email;
-    profileForm.hidden = false;
+    profileOpen.hidden = false;
     emailInput.value = "";
     passwordInput.value = "";
 
     if (loginButton) loginButton.hidden = true;
-    if (logoutButton) logoutButton.hidden = false;
 
     notifyGame(() => user.getIdToken());
   } else {
+    if (profileDialog.open) profileDialog.close();
     showAuthScreen(!guestMode);
-    loginStatus.textContent = "Você não está conectado.";
-    loginMessage.textContent = "Entre para jogar online.";
+    loginStatus.textContent = "Modo local";
+    profilePanel.removeAttribute("data-connected");
+    loginMessage.textContent = "";
     privateEmail.textContent = "";
     privateEmail.hidden = true;
-    profileForm.hidden = true;
+    profileOpen.hidden = true;
 
     if (loginButton) loginButton.hidden = false;
-    if (logoutButton) logoutButton.hidden = true;
 
     notifyGame(null);
   }

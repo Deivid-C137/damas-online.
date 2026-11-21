@@ -129,6 +129,7 @@ async function account(index, waitForBalance = true) {
 }
 
 async function loginAgain({ page, email }) {
+  await page.locator("#profile-open").click();
   await page.locator("#google-logout").click();
   await page.locator("#auth-tab-login").click();
   await page.locator("#auth-email").fill(email);
@@ -138,9 +139,11 @@ async function loginAgain({ page, email }) {
 }
 
 async function setNickname(page, name, expected) {
+  await page.locator("#profile-open").click();
   await page.locator("#profile-nickname").fill(name);
   await page.locator("#profile-save").click();
   await waitText(page.locator("#profile-message"), expected);
+  await page.locator("#profile-close").click();
 }
 
 async function createRoom(black, white) {
@@ -287,8 +290,25 @@ async function main() {
   await loginAgain(black);
   console.log("OK: saldo indisponível, recuperação automática e exibição de saldo zero.");
   for (const { page, email } of [black, white]) {
+    assert.equal(await page.locator("#profile-dialog").isVisible(), false);
+    assert.equal(await page.locator("#login-status").innerText(), "Conta conectada");
+    if (page === white.page) await page.setViewportSize({ width: 390, height: 760 });
+    await page.locator("#profile-open").click();
+    const dialog = page.getByRole("dialog", { name: "Meu perfil" });
+    assert.equal(await dialog.evaluate(el => el.matches(":modal")), true);
+    const box = await dialog.boundingBox();
+    const viewport = page.viewportSize();
+    assert.ok(box.x >= 0 && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height);
     assert.equal(await page.locator("#login-email").innerText(), email);
-    assert.equal(await page.locator("#login-status").innerText(), "Conectado como Jogador");
+    await page.locator("#profile-nickname").fill("Rascunho");
+    await page.locator("#profile-close").click();
+    await page.locator("#profile-open").click();
+    await eventually(async () => assert.equal(await page.locator("#profile-nickname").inputValue(), ""));
+    assert.equal(await page.locator("#profile-save").isDisabled(), true);
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#profile-dialog").isVisible(), false);
+    assert.equal(await page.locator("#profile-open").evaluate(el => el === document.activeElement), true);
+    if (page === white.page) await page.setViewportSize({ width: 1280, height: 720 });
     assert.equal(await page.locator("#auth-email").inputValue(), "");
   }
   assert.equal((await fetch(`${origin}/rota-inexistente`)).status, 404);
@@ -296,8 +316,10 @@ async function main() {
   await setNickname(black.page, "F d P", /xingamentos/);
   await setNickname(black.page, "P0rn-Hub", /conteúdo adulto/);
   await setNickname(black.page, black.email, /Endereços de e-mail não são aceitos/);
-  await setNickname(black.page, "  Águia   Azul  ", /Apelido salvo/);
-  await setNickname(white.page, "Luz d’Ávila", /Apelido salvo/);
+  await setNickname(black.page, "  Águia   Azul  ", /Apelido atualizado/);
+  await setNickname(white.page, "Luz d’Ávila", /Apelido atualizado/);
+  await waitText(black.page.locator("#profile-name"), /^Águia Azul$/);
+  await waitText(white.page.locator("#profile-name"), /^Luz d’Ávila$/);
 
   await black.page.locator("#create-room").click();
   const lobbyExit = black.page.locator("#leave-room");
@@ -364,7 +386,7 @@ async function main() {
   }
   await waitText(black.page.locator("#white-player"), /Luz d’Ávila/);
   await waitText(white.page.locator("#black-player"), /Águia Azul/);
-  await setNickname(white.page, "Dama da Serra", /Apelido salvo/);
+  await setNickname(white.page, "Dama da Serra", /Apelido atualizado/);
   await waitText(black.page.locator("#white-player"), /Dama da Serra/);
   for (const [own, opponent] of [[black, white], [white, black]]) {
     assert.equal((await own.page.locator("main").innerText()).includes(opponent.email), false);

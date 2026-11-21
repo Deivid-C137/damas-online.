@@ -1185,19 +1185,110 @@ body.auth-locked .game > :not(#auth-screen) { display: none !important; }
 #leave-room[hidden] { display: none; }
 .cell:focus-visible { outline: 3px solid #fff; outline-offset: -3px; z-index: 1; }
 
-.profile-form { display: grid; gap: .5rem; margin-top: 1rem; }
-.profile-form[hidden] { display: none; }
-.profile-controls { display: flex; flex-wrap: wrap; gap: .5rem; }
-.profile-controls input {
-  min-width: 0;
-  flex: 1 1 12rem;
-  padding: .55rem .75rem;
-  color: inherit;
-  background: #070e1f;
-  border: 1px solid #587390;
-  border-radius: .5rem;
+.profile-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .9rem;
+  margin-bottom: 1.15rem;
+  padding: .75rem .95rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
 }
-#profile-help { font-size: .85rem; }
+
+.profile-avatar {
+  display: grid;
+  place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border: 1px solid #3e6481;
+  border-radius: .7rem;
+  background: #101c31;
+  color: var(--cyan);
+  font-size: 1.35rem;
+}
+
+.profile-identity { min-width: 0; }
+.profile-identity strong { display: block; overflow-wrap: anywhere; }
+.profile-identity p {
+  display: flex;
+  align-items: center;
+  gap: .375rem;
+  margin: .25rem 0 0;
+  color: var(--muted);
+  font-size: .78rem;
+}
+.profile-identity p::before {
+  content: "";
+  width: .4rem;
+  height: .4rem;
+  flex: none;
+  background: #8193ae;
+  border-radius: 50%;
+}
+.profile-card[data-connected] p::before { background: #5cf2a0; }
+
+.profile-card .btn { width: auto; }
+.profile-card .btn[hidden] { display: none; }
+
+.profile-dialog:not([open]) { display: none; }
+.profile-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(28rem, calc(100% - 1.75rem));
+  max-height: calc(100% - 1.75rem);
+  padding: 1.2rem;
+  overflow: auto;
+  border: 1px solid #3e6481;
+  border-radius: 1rem;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 1rem 4rem rgb(0 0 0 / 60%);
+}
+.profile-dialog::backdrop { background: rgb(8 11 22 / 78%); }
+.profile-dialog-heading { display: flex; align-items: center; gap: .75rem; }
+.profile-dialog-heading > div { min-width: 0; }
+.profile-dialog-heading h2 { margin: 0; font-size: 1.2rem; }
+#login-email { margin: .25rem 0 0; font-size: .85rem; color: var(--muted); overflow-wrap: anywhere; }
+.profile-form { display: grid; gap: .55rem; margin-top: 1.2rem; }
+.profile-form label { font-size: .88rem; font-weight: 700; }
+.profile-form input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: .55rem .75rem;
+  color: var(--text);
+  background: #080f21;
+  border: 1px solid #526887;
+  border-radius: .55rem;
+}
+#profile-help, #profile-message, #login-message { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.45; }
+#profile-message:not(:empty) { color: var(--text); }
+#profile-message:empty, #login-message:empty { display: none; }
+.profile-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; margin-top: .5rem; }
+.profile-actions .btn-primary { width: auto; }
+.profile-actions .btn:disabled { opacity: .52; cursor: default; }
+.profile-footer { margin-top: 1rem; padding-top: .5rem; border-top: 1px solid var(--border); }
+.profile-logout {
+  min-height: 2.625rem;
+  padding: .45rem 0;
+  border: 0;
+  background: transparent;
+  color: #ff9ba7;
+  font-size: .85rem;
+  font-weight: 700;
+}
+.profile-card button:focus-visible, .profile-dialog :is(button, input):focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+@media (max-width: 370px) {
+  .profile-card { gap: .55rem; padding-inline: .65rem; }
+  .profile-card .btn { padding-inline: .55rem; }
+}
+
 #auth-play-local { margin-top: .75rem; }
 
 /* Jogadores e estado da partida ao redor do tabuleiro */

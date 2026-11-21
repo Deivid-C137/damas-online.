@@ -61,6 +61,7 @@ const betStatusElement = $("bet-status");
   let roomExitAction = null;
   let nicknames = { black: null, white: null };
   let opponentConnected = false;
+  let savedNickname = null;
   let submittedNickname = null;
   let walletGeneration = 0;
   let walletRetry = null;
@@ -674,6 +675,11 @@ const betStatusElement = $("bet-status");
     else hideOpponentAlert();
   }
 
+  function updateProfileSave() {
+    $("profile-save").disabled = !socket?.connected || savedNickname === null ||
+      submittedNickname !== null || $("profile-nickname").value.trim() === savedNickname;
+  }
+
   function disconnectSocket() {
     cancelConnectionTimers();
     sessionReplaced = false;
@@ -684,6 +690,8 @@ const betStatusElement = $("bet-status");
     }
 
     if (onlineRoomCode || onlineResult) clearOnlineRoom();
+    savedNickname = submittedNickname = null;
+    $("profile-name").textContent = "Jogador";
     $("profile-nickname").value = "";
     $("profile-message").textContent = "";
     $("profile-save").disabled = true;
@@ -796,19 +804,23 @@ function registerSocketEvents() {
 
   socket.on("profile:state", ({ nickname }) => {
     const input = $("profile-nickname");
-    if (document.activeElement !== input) input.value = nickname || "";
-    $("profile-save").disabled = false;
+    const next = nickname || "";
+    if (!$("profile-dialog").open || input.value === (savedNickname ?? "")) input.value = next;
+    savedNickname = next;
+    $("profile-name").textContent = next || "Jogador";
+    updateProfileSave();
   });
   socket.on("profile:saved", ({ nickname }) => {
     const input = $("profile-nickname");
     if (input.value === submittedNickname) input.value = nickname || "";
     submittedNickname = null;
-    $("profile-message").textContent = nickname ? "Apelido salvo." : "O nome padrão está ativo.";
-    $("profile-save").disabled = false;
+    $("profile-message").textContent = nickname ? "Apelido atualizado." : "O nome padrão está ativo.";
+    updateProfileSave();
   });
   socket.on("profile:error", ({ message }) => {
+    submittedNickname = null;
     $("profile-message").textContent = message;
-    $("profile-save").disabled = false;
+    updateProfileSave();
   });
   socket.on("profiles:update", payload => {
     if (payload.code !== onlineRoomCode) return;
@@ -856,6 +868,7 @@ function registerSocketEvents() {
     sessionReplaced = reason === "io server disconnect";
     roomExitAction = null;
     respondingBetId = null;
+    submittedNickname = null;
     scheduleConnectionAttempt();
     hideOpponentAlert();
     bettingAvailable = false;
@@ -1176,14 +1189,26 @@ function registerBetControls() {
   }
 
   resetButton.addEventListener("click", startLocalGame);
+  const profileDialog = $("profile-dialog");
+  const profileInput = $("profile-nickname");
+  $("profile-open").addEventListener("click", () => {
+    if (profileDialog.open) return;
+    profileInput.value = submittedNickname ?? savedNickname ?? "";
+    $("profile-message").textContent = "";
+    $("login-message").textContent = "";
+    updateProfileSave();
+    profileDialog.showModal();
+  });
+  $("profile-close").addEventListener("click", () => profileDialog.close());
+  profileInput.addEventListener("input", () => {
+    $("profile-message").textContent = "";
+    updateProfileSave();
+  });
   $("profile-form").addEventListener("submit", event => {
     event.preventDefault();
-    if (!socket?.connected) {
-      $("profile-message").textContent = "Aguarde a conexão para salvar.";
-      return;
-    }
-    $("profile-save").disabled = true;
-    submittedNickname = $("profile-nickname").value;
+    if ($("profile-save").disabled) return;
+    submittedNickname = profileInput.value;
+    updateProfileSave();
     socket.emit("profile:update", { nickname: submittedNickname });
   });
 
