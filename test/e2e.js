@@ -384,7 +384,23 @@ async function main() {
 
   await propose(black.page, white.page);
   assert.deepEqual(await boardLabels(black.page), friendlyBoard);
-  await white.page.locator("#bet-decline").click();
+  await white.page.setViewportSize({ width: 390, height: 760 });
+  const challenge = white.page.getByRole("dialog", { name: "Desafio de aposta" });
+  await challenge.waitFor({ state: "visible" });
+  assert.equal(await white.page.locator("#bet-challenge").evaluate(el => el.matches(":modal")), true);
+  assert.equal(await black.page.locator("#bet-challenge").isVisible(), false);
+  const bounds = await challenge.boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= 390 && bounds.y + bounds.height <= 760);
+  assert.ok(Math.abs(bounds.x + bounds.width / 2 - 195) < 2);
+  assert.ok(Math.abs(bounds.y + bounds.height / 2 - 380) < 2);
+  await waitText(challenge.locator("#bet-challenge-player"), /Águia Azul/);
+  await waitText(challenge.locator("#bet-challenge-amount"), /^5,00$/);
+  await challenge.getByRole("button", { name: "Ver depois" }).click();
+  await challenge.waitFor({ state: "hidden" });
+  await white.page.locator("#bet-challenge-open").click();
+  await challenge.getByRole("button", { name: "Recusar" }).click();
+  await challenge.waitFor({ state: "hidden" });
+  await white.page.setViewportSize({ width: 1280, height: 720 });
   await waitText(black.page.locator("#bet-status"), /refusada|recusada/);
   assert.deepEqual(await boardLabels(black.page), friendlyBoard);
   await propose(black.page, white.page);
@@ -392,6 +408,10 @@ async function main() {
   await eventually(async () => assert.equal(await white.page.locator("#profile-nickname").inputValue(), "Dama da Serra"));
   await waitText(white.page.locator("#black-player"), /Águia Azul/);
   await white.page.locator("#bet-accept").waitFor({ state: "visible" });
+  const desktopBounds = await challenge.boundingBox();
+  const viewport = white.page.viewportSize();
+  assert.ok(Math.abs(desktopBounds.x + desktopBounds.width / 2 - viewport.width / 2) < 2);
+  assert.ok(Math.abs(desktopBounds.y + desktopBounds.height / 2 - viewport.height / 2) < 2);
   await accept(white.page);
   await eventually(async () => {
     assert.deepEqual(await Promise.all([boardLabels(black.page), boardLabels(white.page)]), initialBoards);

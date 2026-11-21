@@ -24,8 +24,11 @@
 // SISTEMA DE APOSTAS
 const betAmountInput = $("bet-amount");
 const betCreateButton = $("bet-create");
-const betResponseArea = $("bet-response-area");
-const betRequestMessage = $("bet-request-message");
+const betChallenge = $("bet-challenge");
+const betChallengeOpen = $("bet-challenge-open");
+const betChallengeStatus = $("bet-challenge-status");
+const betChallengePlayer = $("bet-challenge-player");
+const betChallengeAmount = $("bet-challenge-amount");
 const betAcceptButton = $("bet-accept");
 const betDeclineButton = $("bet-decline");
 const betStatusElement = $("bet-status");
@@ -52,6 +55,8 @@ const betStatusElement = $("bet-status");
   let socket = null;
   let getFirebaseToken = null;
   let onlineBet = null;
+  let deferredBetId = null;
+  let respondingBetId = null;
   let onlineResult = null;
   let roomExitAction = null;
   let nicknames = { black: null, white: null };
@@ -516,12 +521,23 @@ const betStatusElement = $("bet-status");
     const canRespond = pending && onlineBet.responderColor === onlinePlayerColor;
     const ready = Boolean(bettingAvailable && socket?.connected && onlineGameActive && opponentConnected && !gameOver);
     betCreateButton.disabled = !ready || Boolean(onlineBet && onlineBet.status !== "cancelled");
-    betResponseArea.hidden = !canRespond || !ready;
-    betAcceptButton.disabled = !canRespond || !ready;
-    betDeclineButton.disabled = !canRespond || !ready;
-    if (canRespond) {
-      const amount = Number(onlineBet.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
-      betRequestMessage.textContent = `Seu adversário propôs uma aposta de ${amount} créditos. Deseja aceitar?`;
+    const available = canRespond && ready;
+    const responding = available && respondingBetId === onlineBet.id;
+    betChallengeOpen.hidden = !available;
+    betAcceptButton.disabled = !available || responding;
+    betDeclineButton.disabled = !available || responding;
+    if (!pending) deferredBetId = respondingBetId = null;
+    if (!available) {
+      if (betChallenge.open) betChallenge.close();
+      betChallengeStatus.hidden = true;
+    } else {
+      const amount = balanceFormat.format(Number(onlineBet.amount));
+      const challenger = nicknames[onlinePlayerColor === BLACK ? WHITE : BLACK] || "Seu adversário";
+      betChallengePlayer.textContent = `${challenger} desafiou você para uma aposta.`;
+      betChallengeAmount.textContent = amount;
+      if (!betChallenge.open && deferredBetId !== onlineBet.id && !$("resign-dialog").open && !$("disconnect-overlay").open) {
+        betChallenge.showModal();
+      }
     }
     if (!bettingAvailable && onlineGameActive) {
       betStatusElement.textContent = "Apostas temporariamente indisponíveis.";
@@ -839,6 +855,7 @@ function registerSocketEvents() {
     cancelConnectionTimers();
     sessionReplaced = reason === "io server disconnect";
     roomExitAction = null;
+    respondingBetId = null;
     scheduleConnectionAttempt();
     hideOpponentAlert();
     bettingAvailable = false;
@@ -939,8 +956,14 @@ function registerSocketEvents() {
     });
 
     socket.on("bet:error", data => {
+      respondingBetId = null;
       renderBet();
-      betStatusElement.textContent = data.message || "Não foi possível processar a aposta.";
+      const message = data.message || "Não foi possível processar a aposta.";
+      betStatusElement.textContent = message;
+      if (betChallenge.open) {
+        betChallengeStatus.textContent = message;
+        betChallengeStatus.hidden = false;
+      }
     });
   }
 
@@ -982,6 +1005,8 @@ function registerRoomControls() {
     }
   });
   $("disconnect-overlay").addEventListener("cancel", event => event.preventDefault());
+  $("disconnect-overlay").addEventListener("close", renderBet);
+  resignDialog.addEventListener("close", renderBet);
   $("retry-connection").addEventListener("click", () => {
     sessionReplaced = false;
     attemptConnection();
@@ -1065,25 +1090,32 @@ function registerBetControls() {
     socket.emit("bet:create", { amount });
   });
 
-  betAcceptButton.addEventListener("click", () => {
-    if (!socket?.connected) return;
+  function deferBetChallenge() {
+    deferredBetId = onlineBet?.id;
+    betChallenge.close();
+  }
 
-    betStatusElement.textContent = "Enviando resposta...";
-    betAcceptButton.disabled = true;
-    betDeclineButton.disabled = true;
-
-    socket.emit("bet:respond", { accepted: true, betId: onlineBet?.id });
+  betChallenge.addEventListener("cancel", event => {
+    event.preventDefault();
+    deferBetChallenge();
+  });
+  $("bet-challenge-later").addEventListener("click", deferBetChallenge);
+  betChallengeOpen.addEventListener("click", () => {
+    deferredBetId = null;
+    renderBet();
   });
 
-  betDeclineButton.addEventListener("click", () => {
-    if (!socket?.connected) return;
+  function respondToBet(accepted) {
+    if (!socket?.connected || betAcceptButton.disabled) return;
+    respondingBetId = onlineBet.id;
+    betChallengeStatus.textContent = "Enviando resposta…";
+    betChallengeStatus.hidden = false;
+    renderBet();
+    socket.emit("bet:respond", { accepted, betId: onlineBet.id });
+  }
 
-    betStatusElement.textContent = "Recusando aposta...";
-    betAcceptButton.disabled = true;
-    betDeclineButton.disabled = true;
-
-    socket.emit("bet:respond", { accepted: false, betId: onlineBet?.id });
-  });
+  betAcceptButton.addEventListener("click", () => respondToBet(true));
+  betDeclineButton.addEventListener("click", () => respondToBet(false));
 }
 
   // ------------------ JOGADAS ONLINE ------------------

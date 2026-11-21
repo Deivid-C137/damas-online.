@@ -8,14 +8,14 @@
 
   <title>Damas Online | Neon Arena</title>
 
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=neon-bet-challenge">
 
   <!-- Conexão multiplayer -->
   <script src="/socket.io/socket.io.js"></script>
 
   <!-- Lógica principal do jogo -->
   <script src="/rules.js" defer></script>
-  <script src="/script.js?v=restart-on-stake" defer></script>
+  <script src="/script.js?v=neon-bet-challenge" defer></script>
 </head>
 
 <body>
@@ -226,27 +226,7 @@
             Enviar pedido de aposta
           </button>
 
-          <div id="bet-response-area" hidden>
-            <p id="bet-request-message"></p>
-
-            <div class="bet-actions">
-              <button
-                id="bet-accept"
-                class="btn btn-primary"
-                type="button"
-              >
-                Aceitar
-              </button>
-
-              <button
-                id="bet-decline"
-                class="btn btn-secondary"
-                type="button"
-              >
-                Recusar
-              </button>
-            </div>
-          </div>
+          <button id="bet-challenge-open" class="btn btn-secondary" type="button" hidden>Ver desafio de aposta</button>
 
           <p id="bet-status" class="wallet-message" role="status">
             Aguardando uma aposta.
@@ -376,6 +356,25 @@
   <span id="offline-status" role="status">Conexão perdida. Tentando reconectar…</span>
   <button id="retry-connection" type="button" class="btn btn-secondary">Tentar reconectar</button>
 </div>
+<dialog id="bet-challenge" class="bet-challenge" aria-labelledby="bet-challenge-title" aria-describedby="bet-request-message">
+  <div class="bet-challenge-art" aria-hidden="true">
+    <span class="bet-challenge-brand">DAMAS <b>ONLINE</b></span>
+    <span class="bet-challenge-piece bet-challenge-piece-dark"></span>
+    <span class="bet-challenge-versus">VS</span>
+    <span class="bet-challenge-piece bet-challenge-piece-light"></span>
+  </div>
+  <div class="bet-challenge-body">
+    <h2 id="bet-challenge-title" tabindex="-1" autofocus>Desafio de aposta</h2>
+    <p id="bet-request-message"><span id="bet-challenge-player"></span><strong id="bet-challenge-amount"></strong> créditos por jogador</p>
+    <p>Ao aceitar, o tabuleiro reinicia para os dois jogadores.</p>
+    <p id="bet-challenge-status" role="status" hidden></p>
+    <div class="bet-challenge-actions">
+      <button id="bet-accept" class="btn btn-primary" type="button">Aceitar desafio</button>
+      <button id="bet-decline" class="btn btn-secondary" type="button">Recusar</button>
+    </div>
+    <button id="bet-challenge-later" class="bet-challenge-later" type="button">Ver depois</button>
+  </div>
+</dialog>
 <dialog id="resign-dialog" class="resign-dialog" aria-labelledby="resign-title" aria-describedby="resign-message resign-stake">
   <h2 id="resign-title">Desistir da partida?</h2>
   <p id="resign-message">Seu adversário vence por abandono.</p>
