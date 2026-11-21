@@ -534,7 +534,7 @@ const betStatusElement = $("bet-status");
       const amount = balanceFormat.format(Number(onlineBet.amount));
       const challenger = nicknames[onlinePlayerColor === BLACK ? WHITE : BLACK] || "Seu adversário";
       betChallengePlayer.textContent = `${challenger} desafiou você para uma aposta.`;
-      betChallengeAmount.textContent = `${amount} `;
+      betChallengeAmount.textContent = amount;
       if (!betChallenge.open && deferredBetId !== onlineBet.id && !$("resign-dialog").open && !$("disconnect-overlay").open) {
         betChallenge.showModal();
       }
