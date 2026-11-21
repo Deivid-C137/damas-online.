@@ -8,14 +8,14 @@
 
   <title>Damas Online | Neon Arena</title>
 
-  <link rel="stylesheet" href="/style.css?v=bet-challenge">
+  <link rel="stylesheet" href="/style.css?v=neon-bet-challenge">
 
   <!-- Conexão multiplayer -->
   <script src="/socket.io/socket.io.js"></script>
 
   <!-- Lógica principal do jogo -->
   <script src="/rules.js" defer></script>
-  <script src="/script.js?v=bet-challenge" defer></script>
+  <script src="/script.js?v=neon-bet-challenge" defer></script>
 </head>
 
 <body>
@@ -358,13 +358,14 @@
 </div>
 <dialog id="bet-challenge" class="bet-challenge" aria-labelledby="bet-challenge-title" aria-describedby="bet-request-message">
   <div class="bet-challenge-art" aria-hidden="true">
+    <span class="bet-challenge-brand">DAMAS <b>ONLINE</b></span>
     <span class="bet-challenge-piece bet-challenge-piece-dark"></span>
     <span class="bet-challenge-versus">VS</span>
     <span class="bet-challenge-piece bet-challenge-piece-light"></span>
   </div>
   <div class="bet-challenge-body">
     <h2 id="bet-challenge-title" tabindex="-1" autofocus>Desafio de aposta</h2>
-    <p id="bet-request-message"></p>
+    <p id="bet-request-message"><span id="bet-challenge-player"></span><strong id="bet-challenge-amount"></strong> créditos por jogador</p>
     <p>Ao aceitar, o tabuleiro reinicia para os dois jogadores.</p>
     <p id="bet-challenge-status" role="status" hidden></p>
     <div class="bet-challenge-actions">

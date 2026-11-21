@@ -27,7 +27,8 @@ const betCreateButton = $("bet-create");
 const betChallenge = $("bet-challenge");
 const betChallengeOpen = $("bet-challenge-open");
 const betChallengeStatus = $("bet-challenge-status");
-const betRequestMessage = $("bet-request-message");
+const betChallengePlayer = $("bet-challenge-player");
+const betChallengeAmount = $("bet-challenge-amount");
 const betAcceptButton = $("bet-accept");
 const betDeclineButton = $("bet-decline");
 const betStatusElement = $("bet-status");
@@ -532,7 +533,8 @@ const betStatusElement = $("bet-status");
     } else {
       const amount = balanceFormat.format(Number(onlineBet.amount));
       const challenger = nicknames[onlinePlayerColor === BLACK ? WHITE : BLACK] || "Seu adversário";
-      betRequestMessage.textContent = `${challenger} desafiou você para uma aposta de ${amount} créditos por jogador.`;
+      betChallengePlayer.textContent = `${challenger} desafiou você para uma aposta.`;
+      betChallengeAmount.textContent = `${amount} `;
       if (!betChallenge.open && deferredBetId !== onlineBet.id && !$("resign-dialog").open && !$("disconnect-overlay").open) {
         betChallenge.showModal();
       }
