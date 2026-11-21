@@ -8,14 +8,14 @@
 
   <title>Damas Online | Neon Arena</title>
 
-  <link rel="stylesheet" href="/style.css?v=neon-bet-challenge">
+  <link rel="stylesheet" href="/style.css?v=compact-profile">
 
   <!-- Conexão multiplayer -->
   <script src="/socket.io/socket.io.js"></script>
 
   <!-- Lógica principal do jogo -->
   <script src="/rules.js" defer></script>
-  <script src="/script.js?v=neon-bet-challenge" defer></script>
+  <script src="/script.js?v=compact-profile" defer></script>
 </head>
 
 <body>
@@ -40,58 +40,15 @@
       </div>
     </header>
 
-    <!-- CONTA DO JOGADOR -->
-    <section class="panel login-panel" id="login-panel">
-      <div class="section-heading">
-        <span class="eyebrow">IDENTIFICAÇÃO</span>
-        <h2>Sua conta</h2>
-        <p>Conecte sua conta para jogar online.</p>
+    <section class="profile-card" id="login-panel" aria-label="Sua conta">
+      <span class="profile-avatar" aria-hidden="true">♟</span>
+      <div class="profile-identity">
+        <strong id="profile-name">Jogador</strong>
+        <p id="login-status" aria-live="polite">Modo local</p>
       </div>
-
-      <div class="login-content">
-        <div class="player-avatar" aria-hidden="true">♟</div>
-
-        <div class="login-details">
-          <strong id="login-status" aria-live="polite">
-            Você não está conectado.
-          </strong>
-          <p id="login-email" hidden></p>
-        </div>
-      </div>
-
-      <div class="login-actions">
-        <button
-          id="google-login"
-          class="btn btn-primary"
-          type="button"
-        >
-          Entrar na conta
-        </button>
-
-        <button
-          id="google-logout"
-          class="btn btn-secondary"
-          type="button"
-          hidden
-        >
-          Sair da conta
-        </button>
-      </div>
-
-      <form id="profile-form" class="profile-form" hidden>
-        <label for="profile-nickname">Apelido público</label>
-        <div class="profile-controls">
-          <input id="profile-nickname" name="nickname" maxlength="48"
-            placeholder="Jogador" autocomplete="off" aria-describedby="profile-help">
-          <button id="profile-save" class="btn btn-secondary" type="submit" disabled>Salvar apelido</button>
-        </div>
-        <p id="profile-help">O adversário vê o apelido na partida. Deixe em branco para usar o nome padrão.</p>
-        <p id="profile-message" class="wallet-message" role="status"></p>
-      </form>
-
-      <p id="login-message" class="wallet-message" role="status">
-        Entre para identificar sua conta de jogador.
-      </p>
+      <button id="google-login" class="btn btn-primary" type="button">Entrar na conta</button>
+      <button id="profile-open" class="btn btn-secondary" type="button"
+        aria-haspopup="dialog" aria-controls="profile-dialog" hidden>Editar perfil</button>
     </section>
 
     <!-- ÁREA PRINCIPAL -->
@@ -356,6 +313,31 @@
   <span id="offline-status" role="status">Conexão perdida. Tentando reconectar…</span>
   <button id="retry-connection" type="button" class="btn btn-secondary">Tentar reconectar</button>
 </div>
+<dialog id="profile-dialog" class="profile-dialog" aria-labelledby="profile-title">
+  <header class="profile-dialog-heading">
+    <span class="profile-avatar" aria-hidden="true">♟</span>
+    <div>
+      <h2 id="profile-title">Meu perfil</h2>
+      <p id="login-email" hidden></p>
+    </div>
+  </header>
+  <form id="profile-form" class="profile-form">
+    <label for="profile-nickname">Apelido público</label>
+    <input id="profile-nickname" name="nickname" maxlength="48" placeholder="Jogador"
+      autocomplete="off" aria-describedby="profile-help" autofocus>
+    <p id="profile-help">Visível para o adversário. Deixe em branco para usar o nome padrão.</p>
+    <p id="profile-message" role="status"></p>
+    <div class="profile-actions">
+      <button id="profile-close" class="btn btn-secondary" type="button">Cancelar</button>
+      <button id="profile-save" class="btn btn-primary" type="submit" disabled>Salvar alterações</button>
+    </div>
+  </form>
+  <footer class="profile-footer">
+    <button id="google-logout" class="profile-logout" type="button">Sair da conta</button>
+    <p id="login-message" role="status"></p>
+  </footer>
+</dialog>
+
 <dialog id="bet-challenge" class="bet-challenge" aria-labelledby="bet-challenge-title" aria-describedby="bet-request-message">
   <div class="bet-challenge-art" aria-hidden="true">
     <span class="bet-challenge-brand">DAMAS <b>ONLINE</b></span>
@@ -429,6 +411,6 @@
   </main>
 
   <!-- Login Google / Firebase -->
-  <script type="module" src="/auth.js"></script>
+  <script type="module" src="/auth.js?v=compact-profile"></script>
 </body>
 </html>
