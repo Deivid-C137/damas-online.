@@ -54,6 +54,7 @@ const betStatusElement = $("bet-status");
 
   let socket = null;
   let getFirebaseToken = null;
+  let refreshFirebaseToken = false;
   let onlineBet = null;
   let deferredBetId = null;
   let respondingBetId = null;
@@ -682,6 +683,8 @@ const betStatusElement = $("bet-status");
 
   function disconnectSocket() {
     cancelConnectionTimers();
+    refreshFirebaseToken = false;
+    $("offline-notice").hidden = true;
     sessionReplaced = false;
     if (socket) {
       socket.removeAllListeners();
@@ -754,7 +757,7 @@ const betStatusElement = $("bet-status");
       auth: async callback => {
         const current = socket;
         const attempt = connectionAttempt;
-        const token = await Promise.resolve().then(() => getFirebaseToken?.()).catch(() => null);
+        const token = await Promise.resolve().then(() => getFirebaseToken?.(refreshFirebaseToken)).catch(() => null);
         if (socket === current && connectionAttempt === attempt) callback(token ? { token } : {});
       }
     });
@@ -771,6 +774,8 @@ function registerSocketEvents() {
 
   socket.on("connect", () => {
     cancelConnectionTimers();
+    refreshFirebaseToken = false;
+    $("retry-connection").textContent = "Tentar reconectar";
     console.log("[SOCKET] Conectado:", socket.id);
 
     // Solicita o saldo da carteira
@@ -786,6 +791,7 @@ function registerSocketEvents() {
       setRoomInfo(`Tentando recuperar a sala ${onlineRoomCode}...`);
       updateTurnBanner("RECUPERANDO PARTIDA", "waiting");
     } else {
+      $("offline-notice").hidden = true;
       setStatus("Conectado ao servidor.");
       setRoomInfo("Conexão pronta. Crie uma sala ou entre com um código.");
     }
@@ -856,10 +862,15 @@ function registerSocketEvents() {
 
   socket.on("connect_error", error => {
     cancelConnectionTimers();
-    if (!$("offline-notice").hidden) $("offline-status").textContent = "Ainda sem conexão. Tentaremos novamente.";
+    const code = error?.data?.code;
+    if (code === "AUTH_MISSING" || code === "AUTH_REJECTED") refreshFirebaseToken = true;
+    const message = code === "AUTH_UNAVAILABLE" ? "Autenticação do servidor indisponível. Tentando reconectar…"
+      : refreshFirebaseToken ? "Sua conta está conectada. Tentando validar a sessão com o servidor…"
+      : "Sua conta está conectada. Tentando reconectar ao servidor…";
+    showConnectionNotice(message);
     scheduleConnectionAttempt();
     setStatus("Falha ao conectar ao servidor.");
-    setRoomInfo(error?.message || "Verifique o login e o servidor.");
+    setRoomInfo(message);
   });
 
   socket.on("disconnect", reason => {
@@ -878,12 +889,13 @@ function registerSocketEvents() {
     $("profile-save").disabled = true;
     updatePlayerCards();
     renderBet();
+    const message = sessionReplaced
+      ? "Sua conta retomou a partida em outra aba ou dispositivo."
+      : "Conexão com o servidor perdida. Tentando reconectar…";
+    showConnectionNotice(message);
+    setStatus(message);
+    setRoomInfo(message);
     if (!onlineRoomCode) return;
-    $("offline-status").textContent = sessionReplaced
-      ? "A partida foi aberta em outra aba. Retome aqui se quiser continuar nesta janela."
-      : "Conexão perdida. Tentando reconectar…";
-    $("offline-notice").hidden = false;
-    setStatus("Conexão perdida. Aguardando reconexão.");
     updateTurnBanner("RECONEXÃO NECESSÁRIA", "waiting");
   });
 
@@ -984,6 +996,27 @@ function registerSocketEvents() {
 
   // ------------------ SALAS ------------------
 
+  function showConnectionNotice(message) {
+    $("offline-status").textContent = message;
+    $("retry-connection").textContent = sessionReplaced ? "Retomar aqui" : "Tentar reconectar";
+    $("offline-notice").hidden = false;
+  }
+
+  function canUseOnlineRooms() {
+    if (socket?.connected) return true;
+    if (!getFirebaseToken) {
+      setRoomInfo("Entre na sua conta para jogar online.");
+      return false;
+    }
+    const message = sessionReplaced ? "A partida está em outra aba ou dispositivo. Selecione Retomar aqui para jogar nesta tela."
+      : "Sua conta está conectada. Aguarde a conexão com o servidor.";
+    setRoomInfo(message);
+    showConnectionNotice(message);
+    if (socket) attemptConnection();
+    else connectSocket();
+    return false;
+  }
+
 function registerRoomControls() {
   if (roomControlsRegistered) return;
   roomControlsRegistered = true;
@@ -1022,14 +1055,13 @@ function registerRoomControls() {
   resignDialog.addEventListener("close", renderBet);
   $("retry-connection").addEventListener("click", () => {
     sessionReplaced = false;
-    attemptConnection();
+    $("retry-connection").textContent = "Tentar reconectar";
+    if (socket) attemptConnection();
+    else connectSocket();
   });
   window.addEventListener("online", attemptConnection);
   createRoomButton.addEventListener("click", () => {
-    if (!socket?.connected) {
-      setRoomInfo("Entre na sua conta e aguarde a conexão.");
-      return;
-    }
+    if (!canUseOnlineRooms()) return;
 
     if (onlineRoomCode) {
       setRoomInfo("Você já está em uma sala. Saia dela antes de criar outra.");
@@ -1041,10 +1073,7 @@ function registerRoomControls() {
   });
 
   joinRoomButton.addEventListener("click", () => {
-    if (!socket?.connected) {
-      setRoomInfo("Entre na sua conta e aguarde a conexão.");
-      return;
-    }
+    if (!canUseOnlineRooms()) return;
 
     if (onlineRoomCode) {
       setRoomInfo("Você já está em uma sala. Saia dela antes de entrar em outra.");
@@ -1258,6 +1287,6 @@ updateTurnBanner();
 updateLiveStatus(false);
 
 setStatus("Aguardando conexão com o servidor.");
-setRoomInfo("Entre com o Google para criar ou entrar em uma sala.");
+setRoomInfo("Conecte-se para criar ou entrar em uma sala.");
 
 })();

@@ -1137,25 +1137,22 @@ function resumeRoomForSocket(socket) {
 // ======================================================
 
 io.use(async (socket, next) => {
+  const authError = (message, code) => next(Object.assign(new Error(message), { data: { code } }));
   try {
     if (!firebaseReady) {
-      return next(
-        new Error("Autenticação indisponível: configure o Firebase Admin.")
-      );
+      return authError("Autenticação temporariamente indisponível.", "AUTH_UNAVAILABLE");
     }
 
     const token = socket.handshake.auth?.token;
 
     if (typeof token !== "string" || !token.trim()) {
-      return next(
-        new Error("Entre na sua conta para jogar online.")
-      );
+      return authError("Entre na sua conta para jogar online.", "AUTH_MISSING");
     }
 
     const decoded = await getAuth().verifyIdToken(token);
 
     if (!decoded.uid) {
-      return next(new Error("Token de autenticação inválido."));
+      return authError("Token de autenticação inválido.", "AUTH_REJECTED");
     }
 
     socket.data.uid = decoded.uid;
@@ -1163,7 +1160,8 @@ io.use(async (socket, next) => {
     next();
   } catch (error) {
     console.warn("[Auth] Conexão recusada:", error.message);
-    next(new Error("Login inválido ou expirado. Entre novamente."));
+    const invalidToken = ["auth/id-token-expired", "auth/invalid-id-token", "auth/argument-error", "auth/id-token-revoked"].includes(error.code);
+    authError("Não foi possível validar a sessão.", invalidToken ? "AUTH_REJECTED" : "AUTH_UNAVAILABLE");
   }
 });
 
