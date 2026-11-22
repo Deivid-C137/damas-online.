@@ -291,7 +291,7 @@ onAuthStateChanged(auth, (user) => {
 
     if (loginButton) loginButton.hidden = true;
 
-    notifyGame(() => user.getIdToken());
+    notifyGame(forceRefresh => user.getIdToken(forceRefresh));
   } else {
     if (profileDialog.open) profileDialog.close();
     showAuthScreen(!guestMode);

@@ -288,6 +288,18 @@ async function main() {
   await pool.query("UPDATE public.wallet_accounts SET balance = 500 WHERE firebase_uid = $1", [uid]);
   const white = await account(2);
   await loginAgain(black);
+  await black.setOffline(true);
+  await waitText(black.page.locator("#status"), /Conexão com o servidor perdida/);
+  await black.page.locator("#join-room").click();
+  await waitText(black.page.locator("#room-info"), /Sua conta está conectada/);
+  await black.page.locator("#create-room").click();
+  await waitText(black.page.locator("#room-info"), /Sua conta está conectada/);
+  await black.page.locator("#retry-connection").waitFor({ state: "visible" });
+  await waitText(black.page.locator("#login-status"), /Conta conectada/);
+  await black.setOffline(false);
+  await black.page.locator("#offline-notice").waitFor({ state: "hidden" });
+  await waitText(black.page.locator("#status"), /^Conectado ao servidor/);
+  console.log("OK: queda no lobby preserva a conta e recupera a conexão sem novo login.");
   console.log("OK: saldo indisponível, recuperação automática e exibição de saldo zero.");
   for (const { page, email } of [black, white]) {
     assert.equal(await page.locator("#profile-dialog").isVisible(), false);
